@@ -1,39 +1,119 @@
 package org.mess.backend.user
 
+import io.ktor.server.config.*
+import io.nats.client.Connection
 import io.nats.client.Nats
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import org.mess.backend.user.db.configureDatabase
-import org.mess.backend.user.db.ProfileService
+import org.mess.backend.user.db.DatabaseConfig
+import org.mess.backend.user.db.initDatabase
+import org.mess.backend.user.models.*
+import org.mess.backend.user.services.ProfileService
+import java.nio.charset.StandardCharsets
+import java.util.UUID
 
-// (Тут должны быть data class'ы для NATS JSON)
-@kotlinx.serialization.Serializable
-data class UserCreatedEvent(val userId: String, val username: String)
-
-val json = Json { ignoreUnknownKeys = true }
+// Глобальный JSON-парсер
+val json = Json {
+    ignoreUnknownKeys = true
+    prettyPrint = true
+}
 
 fun main() {
-    val db = configureDatabase()
-    val profileService = ProfileService(db)
+    // 1. Загружаем конфигурацию
+    val config = Config.load()
+    println("Config loaded. Connecting to NATS at ${config.natsUrl}")
 
-    val natsConnection = Nats.connect("nats://nats:4222")
-    println("User Service connected to NATS")
+    // 2. Инициализируем сервисы
+    val profileService = ProfileService()
 
-    // --- Обработчик Pub/Sub для "user.created" ---
-    val eventDispatcher = natsConnection.createDispatcher { msg ->
-        val eventJson = String(msg.data, Charsets.UTF_8)
-        val event = json.decodeFromString(UserCreatedEvent.serializer(), eventJson)
+    // 3. Подключаемся к БД
+    initDatabase(config.db)
+    println("Database connected.")
 
-        println("Received user.created event for ${event.username}")
-        // Вызываем бизнес-логику (создаем профиль)
-        profileService.createProfile(event.userId, event.username)
+    // 4. Подключаемся к NATS
+    val nats: Connection = Nats.connect(config.natsUrl)
+    println("NATS connected. Awaiting requests...")
 
-        // (Ответ не требуется, это Pub/Sub)
+    // --- СЛУШАТЕЛЬ 1: Событие `user.created` (Pub/Sub) ---
+    val eventDispatcher = nats.createDispatcher { msg ->
+        try {
+            val eventJson = String(msg.data, StandardCharsets.UTF_8)
+            val event = json.decodeFromString<UserCreatedEvent>(eventJson)
+
+            println("Received user.created event for ${event.username}")
+
+            // Вызываем бизнес-логику (создаем профиль)
+            profileService.createProfile(UUID.fromString(event.userId), event.username)
+            // Ответ не требуется (это Pub/Sub)
+
+        } catch (e: Exception) {
+            println("Error processing user.created event: ${e.message}")
+        }
     }
     eventDispatcher.subscribe("user.created")
 
-    // --- Обработчик Request-Reply для "user.profile.get" ---
-    // ... (подписывается на "user.profile.get", лезет в БД, отвечает) ...
+    // --- СЛУШАТЕЛЬ 2: Запрос `user.profile.get` (Request-Reply) ---
+    val getDispatcher = nats.createDispatcher { msg ->
+        var responseJson: String
+        try {
+            val requestJson = String(msg.data, StandardCharsets.UTF_8)
+            val request = json.decodeFromString<NatsProfileGetRequest>(requestJson)
 
-    // --- Обработчик Request-Reply для "user.profile.update" ---
-    // ... (подписывается на "user.profile.update", обновляет БД, отвечает) ...
+            val profile = profileService.getProfile(UUID.fromString(request.userId))
+
+            responseJson = if (profile != null) {
+                json.encodeToString(profile)
+            } else {
+                json.encodeToString(NatsErrorResponse("Profile not found for user ${request.userId}"))
+            }
+        } catch (e: Exception) {
+            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+        }
+        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+    }
+    getDispatcher.subscribe("user.profile.get")
+
+    // --- СЛУШАТЕЛЬ 3: Запрос `user.profile.update` (Request-Reply) ---
+    val updateDispatcher = nats.createDispatcher { msg ->
+        var responseJson: String
+        try {
+            val requestJson = String(msg.data, StandardCharsets.UTF_8)
+            val request = json.decodeFromString<NatsProfileUpdateRequest>(requestJson)
+
+            val updatedProfile = profileService.updateProfile(
+                UUID.fromString(request.userId),
+                request.newNickname,
+                request.newAvatarUrl
+            )
+            responseJson = json.encodeToString(updatedProfile)
+
+        } catch (e: Exception) {
+            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+        }
+        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+    }
+    updateDispatcher.subscribe("user.profile.update")
+
+    // --- СЛУШАТЕЛЬ 4: Запрос `user.search` (Request-Reply) ---
+    val searchDispatcher = nats.createDispatcher { msg ->
+        var responseJson: String
+        try {
+            val requestJson = String(msg.data, StandardCharsets.UTF_8)
+            val request = json.decodeFromString<NatsSearchRequest>(requestJson)
+
+            val response = profileService.searchProfiles(request.query)
+            responseJson = json.encodeToString(response)
+
+        } catch (e: Exception) {
+            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+        }
+        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+    }
+    searchDispatcher.subscribe("user.search")
+
+    // Держим поток живым
+    Runtime.getRuntime().addShutdownHook(Thread {
+        println("Shutting down NATS connection...")
+        nats.close()
+    })
 }
