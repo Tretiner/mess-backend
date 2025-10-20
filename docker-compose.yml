@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  # NATS сервер
+  nats:
+    image: nats:2.10
+    ports:
+      - "4222:4222" # Клиентский порт
+      - "8222:8222" # Мониторинг
+    command: "-js -m 8222"
+
+  # НОВЫЙ СЕРВИС: PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mess_user
+      POSTGRES_PASSWORD: mess_password
+      POSTGRES_DB: mess_db
+    ports:
+      - "5432:5432" # Открываем порт для отладки с локальной машины
+    volumes:
+      - postgres-data:/var/lib/postgresql/data # Сохраняем данные
+
+  # Наш Backend
+  backend:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # Ktor будет читать это из application.conf
+      JWT_SECRET: "my-super-secret-key-for-jwt-12345"
+      JWT_ISSUER: "org.mess.backend"
+      NATS_URL: "nats://nats:4222"
+
+      # Переменные для подключения к БД
+      DB_HOST: "postgres" # Имя сервиса в docker-compose
+      DB_PORT: "5432"
+      DB_USER: "mess_user"
+      DB_PASSWORD: "mess_password"
+      DB_NAME: "mess_db"
+    depends_on:
+      - nats
+      - postgres # Запускаем бэкенд только после NATS и Postgres
+
+volumes:
+  postgres-data: # Новый volume для данных Postgres
