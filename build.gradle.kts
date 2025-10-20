@@ -1,50 +1,42 @@
-val ktorVersion = "2.3.11"
-val exposedVersion = "0.49.0" // Возвращаем Exposed
-val logbackVersion = "1.4.14"
-val natsVersion = "2.17.3"
-val kotlinxDatetimeVersion = "0.6.0"
+// --- Централизованное управление версиями ---
+// Все sub-проекты будут ссылаться на эти переменные
 
+
+// Применяем плагины ко всем модулям (включая :proto, :gateway и т.д.)
 plugins {
-    kotlin("jvm") version "1.9.23"
-    application
-    kotlin("plugin.serialization") version "1.9.23"
+    val kotlinVersion = "1.9.23"
+    val ktorVersion = "2.3.11"
+    val logbackVersion = "1.4.14"
+    val exposedVersion = "0.49.0"
+    val postgresDriverVersion = "42.7.3"
+    val natsVersion = "2.17.3"
+    val serializationVersion = "1.6.3"
+    val kotlinxDatetimeVersion = "0.6.0"
+    val jwtVersion = "4.4.0"
+    val jbcryptVersion = "0.4"
+    val slf4jVersion = "2.0.13"
+    val grpcVersion = "1.64.0"
+    val grpcKotlinVersion = "1.4.1"
+    val protobufVersion = "0.9.4"
+    val protobufPluginVersion = "3.25.3"
+    val shadowVersion = "8.1.1"
+
+    // Делаем Kotlin JVM плагин доступным для всех
+    kotlin("jvm") version kotlinVersion apply false
+    // Делаем Serialization плагин доступным для всех
+    kotlin("plugin.serialization") version kotlinVersion apply false
+    // Делаем Protobuf плагин доступным (для :proto и :gateway)
+    id("com.google.protobuf") version protobufVersion apply false
+    // Делаем Shadow (fat jar) плагин доступным
+    id("com.github.johnrengelman.shadow") version shadowVersion apply false
 }
 
-group = "org.mess.backend"
-version = "1.0.0"
+// Общие настройки для ВСЕХ проектов (включая корневой)
+allprojects {
+    group = "org.mess.backend"
+    version = "1.0.0"
 
-application {
-    mainClass.set("io.ktor.server.netty.EngineMain")
-}
-
-repositories {
-    mavenCentral()
-}
-
-dependencies {
-    // --- Ktor Core & Plugins ---
-    implementation("io.ktor:ktor-server-core-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-netty-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-websockets-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-auth-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-auth-jwt-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-call-logging-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-status-pages-jvm:$ktorVersion")
-
-    // --- Database (Exposed + SQLite) ---
-    implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
-    implementation("org.jetbrains.exposed:exposed-dao:$exposedVersion")
-    implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
-    implementation("org.jetbrains.exposed:exposed-kotlin-datetime:$exposedVersion")
-    implementation("org.xerial:sqlite-jdbc:3.45.1.0")
-
-    // --- NATS Client ---
-    implementation("io.nats:jnats:$natsVersion")
-
-    // --- Utilities ---
-    implementation("ch.qos.logback:logback-classic:$logbackVersion")
-    implementation("org.mindrot:jbcrypt:0.4")
-    implementation("org.jetbrains.kotlinx:kotlinx-datetime:$kotlinxDatetimeVersion")
+    repositories {
+        mavenCentral()
+    }
 }

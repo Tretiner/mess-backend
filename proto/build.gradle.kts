@@ -11,11 +11,13 @@ repositories {
 
 dependencies {
     // Зависимости, необходимые для gRPC
-    implementation("io.grpc:grpc-protobuf:1.64.0")
+    api("io.grpc:grpc-protobuf:1.64.0")
     implementation("io.grpc:grpc-stub:1.64.0")
     implementation("com.google.protobuf:protobuf-kotlin:3.25.3")
     // Для корутин в gRPC
     implementation("io.grpc:grpc-kotlin-stub:1.4.1")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.3.2")
 }
 
 // Настройка плагина

@@ -1,39 +1,55 @@
 package org.mess.backend.gateway
 
-import io.grpc.Server
-import io.grpc.ServerBuilder
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.websocket.* // <-- Import the WebSockets plugin
 import io.nats.client.Connection
 import io.nats.client.Nats
 import kotlinx.serialization.json.Json
-import org.mess.backend.gateway.grpc.AuthServiceImpl
-import org.mess.backend.gateway.grpc.ChatServiceImpl
-import org.mess.backend.gateway.grpc.UserServiceImpl
+import org.mess.backend.gateway.plugins.* // Import all plugin config functions
+import org.mess.backend.gateway.services.NatsClient
+import org.slf4j.LoggerFactory
+import java.time.Duration // <-- Import for WebSocket settings if needed
 
-// Модели JSON, которые мы гоняем по NATS (они должны совпадать с моделями в других сервисах)
-// ... (здесь должны быть data class'ы, например, NatsAuthRequest и т.д.)
-
-val json = Json { ignoreUnknownKeys = true }
+val json = Json { ignoreUnknownKeys = true ; prettyPrint = true }
+val log = LoggerFactory.getLogger("GatewayApplication")
 
 fun main() {
-    val natsPort = System.getenv("NATS_PORT") ?: "4222"
-    val natsHost = System.getenv("NATS_HOST") ?: "nats"
-    val natsConnection: Connection = Nats.connect("nats://$natsHost:$natsPort")
-    println("Gateway connected to NATS")
+    val config = Config.load()
+    log.info("Config loaded. Connecting to NATS at ${config.natsUrl}")
 
-    val grpcPort = 8080
+    val natsConnection = try {
+        Nats.connect(config.natsUrl)
+    } catch (e: Exception) {
+        log.error("Failed to connect to NATS at ${config.natsUrl}: ${e.message}", e)
+        throw e
+    }
+    log.info("NATS connected successfully.")
 
-    // Создаем gRPC сервисы, передавая им NATS-клиент
-    val authService = AuthServiceImpl(natsConnection, json)
-    val userService = UserServiceImpl(natsConnection, json)
-    val chatService = ChatServiceImpl(natsConnection, json)
+    val natsClient = NatsClient(natsConnection, json)
 
-    val server: Server = ServerBuilder.forPort(grpcPort)
-        .addService(authService)
-        .addService(userService)
-        .addService(chatService)
-        .build()
+    val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
+    log.info("Starting Ktor server on port $port")
+    embeddedServer(Netty, port = port, host = "0.0.0.0", module = { module(config, natsClient, natsConnection) })
+        .start(wait = true)
+}
 
-    server.start()
-    println("gRPC Gateway started on port $grpcPort")
-    server.awaitTermination()
+fun Application.module(config: AppConfig, natsClient: NatsClient, natsConnection: Connection) {
+    configureSerialization()
+    configureSecurity(config.jwt)
+    configureStatusPages()
+    configureLogging()
+
+    install(WebSockets) {
+        pingPeriod = Duration.ofSeconds(15) // Example: configure ping interval
+        timeout = Duration.ofSeconds(15)
+        maxFrameSize = Long.MAX_VALUE
+        masking = false
+    }
+
+    // Configure routing (which uses WebSockets)
+    configureRouting(natsClient, natsConnection)
+
+    log.info("Ktor server configured and running.")
 }

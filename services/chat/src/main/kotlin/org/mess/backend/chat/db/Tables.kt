@@ -1,5 +1,6 @@
 package org.mess.backend.chat.db
 
+import kotlinx.datetime.Clock
 import org.jetbrains.exposed.dao.id.UUIDTable
 import org.jetbrains.exposed.sql.ReferenceOption
 import org.jetbrains.exposed.sql.kotlin.datetime.timestamp
@@ -27,5 +28,5 @@ object MessagesTable : UUIDTable("t_messages") {
     val senderId = uuid("sender_id") // Мы не можем ссылаться на `user-service`
     val type = varchar("type", 20).default("text")
     val content = text("content")
-    val sentAt = timestamp("sent_at").default(Instant.now())
+    val sentAt = timestamp("sent_at").default(Clock.System.now())
 }

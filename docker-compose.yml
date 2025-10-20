@@ -1,46 +1,85 @@
-version: '3.8'
-
 services:
-  # NATS сервер
   nats:
     image: nats:2.10
-    ports:
-      - "4222:4222" # Клиентский порт
-      - "8222:8222" # Мониторинг
+    ports: ["4222:4222", "8222:8222"]
     command: "-js -m 8222"
+    networks: [mess-net]
 
-  # НОВЫЙ СЕРВИС: PostgreSQL
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: mess_user
-      POSTGRES_PASSWORD: mess_password
-      POSTGRES_DB: mess_db
-    ports:
-      - "5432:5432" # Открываем порт для отладки с локальной машины
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin_password
+    ports: ["5432:5432"]
     volumes:
-      - postgres-data:/var/lib/postgresql/data # Сохраняем данные
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    networks: [mess-net]
 
-  # Наш Backend
-  backend:
-    build: .
-    ports:
-      - "8080:8080"
+  # 3. Auth Service (с новым именем 'auth')
+  auth: # <-- ИЗМЕНЕНИЕ
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile # <-- ИЗМЕНЕНИЕ
     environment:
-      # Ktor будет читать это из application.conf
+      NATS_URL: "nats://nats:4222"
       JWT_SECRET: "my-super-secret-key-for-jwt-12345"
       JWT_ISSUER: "org.mess.backend"
-      NATS_URL: "nats://nats:4222"
+      DB_URL: "jdbc:postgresql://postgres:5432/auth_db"
+      DB_USER: "admin"
+      DB_PASS: "admin_password"
+    depends_on: [nats, postgres]
+    networks: [mess-net]
 
-      # Переменные для подключения к БД
-      DB_HOST: "postgres" # Имя сервиса в docker-compose
-      DB_PORT: "5432"
-      DB_USER: "mess_user"
-      DB_PASSWORD: "mess_password"
-      DB_NAME: "mess_db"
+  # 4. User Service (с новым именем 'user')
+  user: # <-- ИЗМЕНЕНИЕ
+    build:
+      context: .
+      dockerfile: services/user/Dockerfile # <-- ИЗМЕНЕНИЕ
+    environment:
+      NATS_URL: "nats://nats:4222"
+      DB_URL: "jdbc:postgresql://postgres:5432/user_db"
+      DB_USER: "admin"
+      DB_PASS: "admin_password"
+    depends_on: [nats, postgres]
+    networks: [mess-net]
+
+  # 5. Chat Service (с новым именем 'chat')
+  chat: # <-- ИЗМЕНЕНИЕ
+    build:
+      context: .
+      dockerfile: services/chat/Dockerfile # <-- ИЗМЕНЕНИЕ
+    environment:
+      NATS_URL: "nats://nats:4222"
+      DB_URL: "jdbc:postgresql://postgres:5432/chat_db"
+      DB_USER: "admin"
+      DB_PASS: "admin_password"
     depends_on:
       - nats
-      - postgres # Запускаем бэкенд только после NATS и Postgres
+      - postgres
+      - user # <-- ИЗМЕНЕНИЕ
+    networks: [mess-net]
+
+  # 6. Gateway (остается без изменений, но его зависимости обновлены)
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    ports: ["8080:8080"] # gRPC-сервер
+    environment:
+      NATS_URL: "nats://nats:4222"
+      JWT_SECRET: "my-super-secret-key-for-jwt-12345"
+      JWT_ISSUER: "org.mess.backend"
+    depends_on:
+      - nats
+      - auth # <-- ИЗМЕНЕНИЕ
+      - user # <-- ИЗМЕНЕНИЕ
+      - chat # <-- ИЗМЕНЕНИЕ
+    networks: [mess-net]
 
 volumes:
-  postgres-data: # Новый volume для данных Postgres
+  postgres-data:
+
+networks:
+  mess-net:
+    driver: bridge

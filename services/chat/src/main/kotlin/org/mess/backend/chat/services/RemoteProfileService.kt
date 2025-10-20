@@ -33,7 +33,7 @@ class RemoteProfileService(
                 "user.profile.get",
                 requestJson.toByteArray(StandardCharsets.UTF_8)
             )
-            val reply = future.await(Duration.ofSeconds(2))
+            val reply = future.await()
 
             val replyJson = String(reply.data, StandardCharsets.UTF_8)
 

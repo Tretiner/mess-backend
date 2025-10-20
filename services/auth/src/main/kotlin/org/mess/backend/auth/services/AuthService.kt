@@ -1,7 +1,7 @@
 package org.mess.backend.auth.services
 
 import org.jetbrains.exposed.sql.insert
-import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.auth.db.AuthUsersTable
 import org.mess.backend.auth.models.NatsUserProfile
@@ -26,7 +26,7 @@ class AuthService(private val tokenService: TokenService) {
     fun registerUser(username: String, password: String): RegistrationResult {
         return transaction {
             // 1. Проверяем, не занят ли username
-            val existing = AuthUsersTable.select { AuthUsersTable.username eq username }.count()
+            val existing = AuthUsersTable.selectAll().where { AuthUsersTable.username eq username }.count()
             if (existing > 0) {
                 return@transaction RegistrationResult(null, null, null) // Пользователь занят
             }
@@ -52,7 +52,7 @@ class AuthService(private val tokenService: TokenService) {
 
     fun loginUser(username: String, password: String): LoginResult {
         return transaction {
-            val row = AuthUsersTable.select { AuthUsersTable.username eq username }.firstOrNull()
+            val row = AuthUsersTable.selectAll().where { AuthUsersTable.username eq username }.firstOrNull()
                 ?: return@transaction LoginResult(null, null) // Пользователь не найден
 
             val userId = row[AuthUsersTable.id].value

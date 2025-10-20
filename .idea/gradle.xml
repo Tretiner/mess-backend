@@ -9,10 +9,10 @@
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
-            <option value="$PROJECT_DIR$/proto" />
             <option value="$PROJECT_DIR$/services" />
             <option value="$PROJECT_DIR$/services/auth" />
             <option value="$PROJECT_DIR$/services/chat" />
+            <option value="$PROJECT_DIR$/services/gateway" />
             <option value="$PROJECT_DIR$/services/user" />
           </set>
         </option>

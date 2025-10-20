@@ -95,7 +95,7 @@ class ChatService(
                             ((ChatMembersTable.userId eq userUUID1) or (ChatMembersTable.userId eq userUUID2))
                 }
                 .groupBy(ChatMembersTable.chatId)
-                .having { count(ChatMembersTable.userId) eq 2 }
+                .having { ChatMembersTable.userId.count() eq 2 }
                 .map { it[ChatMembersTable.chatId] }
                 .firstOrNull()?.value
         }
