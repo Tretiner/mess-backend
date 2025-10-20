@@ -1,10 +1,8 @@
 val ktorVersion = "2.3.11"
+val exposedVersion = "0.49.0" // Возвращаем Exposed
 val logbackVersion = "1.4.14"
 val natsVersion = "2.17.3"
 val kotlinxDatetimeVersion = "0.6.0"
-val ktormVersion = "3.6.0" // Ktorm
-val hikariVersion = "5.1.0" // Connection Pool
-val postgresDriverVersion = "42.7.3" // PostgreSQL Driver
 
 plugins {
     kotlin("jvm") version "1.9.23"
@@ -35,11 +33,12 @@ dependencies {
     implementation("io.ktor:ktor-server-call-logging-jvm:$ktorVersion")
     implementation("io.ktor:ktor-server-status-pages-jvm:$ktorVersion")
 
-    // --- Database (Ktorm + PostgreSQL) ---
-    implementation("org.ktorm:ktorm-core:$ktormVersion")
-    implementation("org.ktorm:ktorm-support-kotlin-datetime:$ktormVersion") // Поддержка kotlinx.datetime
-    implementation("org.postgresql:postgresql:$postgresDriverVersion")     // Драйвер PostgreSQL
-    implementation("com.zaxxer:HikariCP:$hikariVersion")                  // Пул соединений
+    // --- Database (Exposed + SQLite) ---
+    implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-dao:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
+    implementation("org.jetbrains.exposed:exposed-kotlin-datetime:$exposedVersion")
+    implementation("org.xerial:sqlite-jdbc:3.45.1.0")
 
     // --- NATS Client ---
     implementation("io.nats:jnats:$natsVersion")

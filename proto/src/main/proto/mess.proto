@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+// Namespace для сгенерированного Kotlin/Java кода
+option java_package = "org.mess.backend.grpc";
+option java_multiple_files = true;
+
+// -------------------
+// Главные Сервисы
+// -------------------
+
+// Сервис Аутентификации
+service AuthService {
+  rpc Register(AuthRequest) returns (AuthResponse);
+  rpc Login(AuthRequest) returns (AuthResponse);
+}
+
+// Сервис Пользователя
+service UserService {
+  // rpc GetUserProfile(GetUserProfileRequest) returns (UserProfile);
+  rpc GetMyProfile(Empty) returns (UserProfile);
+  rpc UpdateMyProfile(UpdateProfileRequest) returns (UserProfile);
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
+}
+
+// Сервис Чата
+service ChatService {
+  rpc CreateGroupChat(CreateGroupChatRequest) returns (Chat);
+  rpc CreateDirectMessage(CreateDirectMessageRequest) returns (Chat);
+  rpc GetMyChats(Empty) returns (GetMyChatsResponse);
+
+  // Главный стрим для real-time чата
+  // Клиент и сервер обмениваются сообщениями по этому каналу
+  rpc ConnectChat(stream ChatMessageRequest) returns (stream ChatMessageResponse);
+}
+
+// -------------------
+// Общие Модели
+// -------------------
+
+message UserProfile {
+  string id = 1;
+  string nickname = 2;
+  string avatarUrl = 3;
+}
+
+message Chat {
+  string id = 1;
+  string name = 2;
+  bool isGroup = 3;
+  repeated UserProfile members = 4;
+}
+
+message Empty {
+  // Используется для запросов без параметров
+}
+
+// -------------------
+// Модели AuthService
+// -------------------
+
+message AuthRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthResponse {
+  string token = 1;
+  UserProfile profile = 2;
+}
+
+// -------------------
+// Модели UserService
+// -------------------
+
+message UpdateProfileRequest {
+  string newNickname = 1;
+  string newAvatarUrl = 2;
+}
+
+message SearchUsersRequest {
+  string query = 1;
+}
+
+message SearchUsersResponse {
+  repeated UserProfile users = 1;
+}
+
+// -------------------
+// Модели ChatService
+// -------------------
+
+message CreateGroupChatRequest {
+  string name = 1;
+  repeated string memberIds = 2;
+}
+
+message CreateDirectMessageRequest {
+  string otherUserId = 1;
+}
+
+message GetMyChatsResponse {
+  repeated Chat chats = 1;
+}
+
+// --- Модели для Стрима ---
+
+// Сообщение ОТ КЛИЕНТА к СЕРВЕРУ
+message ChatMessageRequest {
+  string chatId = 1;
+  string type = 2; // "text", "image_url", "voice_url"
+  string content = 3;
+}
+
+// Сообщение ОТ СЕРВЕРА к КЛИЕНТУ
+message ChatMessageResponse {
+  string messageId = 1;
+  string chatId = 2;
+  UserProfile sender = 3;
+  string type = 4;
+  string content = 5;
+  string sentAt = 6; // ISO 8601 (kotlinx.datetime.Instant)
+}
