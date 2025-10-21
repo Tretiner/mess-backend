@@ -3,7 +3,6 @@ package org.mess.backend.chat.services
 import io.nats.client.Connection
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.json.Json
-import org.mess.backend.chat.models.NatsErrorResponse
 import org.mess.backend.chat.models.NatsProfileGetRequest
 import org.mess.backend.chat.models.NatsUserProfile
 import org.mess.backend.core.DefaultJson

@@ -19,7 +19,7 @@ data class NatsProfileGetRequest(
 data class NatsProfileUpdateRequest(
     val userId: String,
     // --- НОВЫЕ ПОЛЯ ---
-    val newNickname: String? = null,
+    val newUsername: String? = null,
     val newAvatarUrl: String? = null,
     val newEmail: String? = null,
     val newFullName: String? = null
@@ -36,7 +36,7 @@ data class NatsSearchRequest(
 data class NatsUserProfile(
     val id: String,
     // --- НОВЫЕ ПОЛЯ ---
-    val nickname: String,
+    val username: String,
     val avatarUrl: String?,
     val email: String?,
     val fullName: String?

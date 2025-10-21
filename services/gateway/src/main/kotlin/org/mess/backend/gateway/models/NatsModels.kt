@@ -7,10 +7,6 @@ import kotlinx.serialization.Serializable
 // Этот файл содержит data-классы, описывающие JSON-контракты
 // для общения между gateway и ДРУГИМИ микросервисами через NATS.
 
-// --- Общие ---
-@Serializable
-data class NatsErrorResponse(val error: String) // Ожидаемый ответ с ошибкой от любого сервиса
-
 // --- Модели для `auth-service` ---
 @Serializable
 data class NatsAuthRequest(val username: String, val password: String) // Запрос К auth-service (на auth.register/auth.login)
@@ -25,7 +21,7 @@ data class NatsProfileGetRequest(val userId: String) // Запрос К user-ser
 @Serializable
 data class NatsProfileUpdateRequest( // Запрос К user-service (на user.profile.update)
     val userId: String,
-    val newNickname: String? = null,
+    val newUsername: String? = null,
     val newAvatarUrl: String? = null,
     val newEmail: String? = null,
     val newFullName: String? = null
@@ -36,7 +32,7 @@ data class NatsSearchRequest(val query: String) // Запрос К user-service 
 @Serializable
 data class NatsUserProfile( // Ответ ОТ user-service (ПОЛНАЯ модель профиля)
     val id: String,
-    val nickname: String,
+    val username: String,
     val avatarUrl: String?,
     val email: String?,
     val fullName: String?

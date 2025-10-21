@@ -1,9 +1,7 @@
 package org.mess.backend.user.services
 
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.user.db.UserProfilesTable
 import org.mess.backend.user.models.NatsSearchResponse
@@ -16,7 +14,7 @@ class ProfileService {
     private fun toNatsUserProfile(row: ResultRow): NatsUserProfile {
         return NatsUserProfile(
             id = row[UserProfilesTable.id].value.toString(),
-            nickname = row[UserProfilesTable.nickname],
+            username = row[UserProfilesTable.nickname],
             avatarUrl = row[UserProfilesTable.avatarUrl],
             // --- НОВЫЕ ПОЛЯ ---
             email = row[UserProfilesTable.email],
@@ -58,7 +56,7 @@ class ProfileService {
      */
     fun updateProfile(
         userId: UUID,
-        newNickname: String?,
+        newUsername: String?,
         newAvatarUrl: String?,
         newEmail: String?,
         newFullName: String?
@@ -66,7 +64,7 @@ class ProfileService {
         val updatedRows = transaction {
             UserProfilesTable.update({ UserProfilesTable.id eq userId }) {
                 // Обновляем только не-null поля
-                newNickname?.let { nn -> it[nickname] = nn }
+                newUsername?.let { nn -> it[nickname] = nn }
                 newAvatarUrl?.let { av -> it[avatarUrl] = av }
                 newEmail?.let { em -> it[email] = em }
                 newFullName?.let { fn -> it[fullName] = fn }

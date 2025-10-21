@@ -2,6 +2,7 @@
 package org.mess.backend.gateway.models.api
 
 import kotlinx.serialization.Serializable
+import org.mess.backend.gateway.models.nats.NatsAuthResponse
 import org.mess.backend.gateway.models.nats.NatsChat // NATS модель чата
 import org.mess.backend.gateway.models.nats.NatsGetMyChatsResponse // NATS ответ списка чатов
 import org.mess.backend.gateway.models.nats.NatsSearchResponse // NATS ответ поиска
@@ -14,7 +15,7 @@ data class AuthApiRequest(val username: String, val password: String)
 
 @Serializable
 data class UpdateProfileApiRequest(
-    val newNickname: String? = null, // Поля опциональны для обновления
+    val newUsername: String? = null, // Поля опциональны для обновления
     val newAvatarUrl: String? = null,
     val newEmail: String? = null,
     val newFullName: String? = null
@@ -36,13 +37,13 @@ data class AuthApiResponse(val token: String, val profile: UserAuthProfileRespon
 @Serializable
 data class UserAuthProfileResponse( // Модель профиля для клиента
     val id: String,
-    val nickname: String,
+    val username: String,
 )
 
 @Serializable
 data class UserProfileApiResponse( // Модель профиля для клиента
     val id: String,
-    val nickname: String,
+    val username: String,
     val avatarUrl: String?,
     val email: String?,
     val fullName: String?
@@ -81,9 +82,19 @@ data class ErrorApiResponse(val error: String)
 // --- Функции-мапперы: Конвертация из NATS моделей в API модели ---
 
 // NatsUserProfile -> UserProfileApiResponse
+fun NatsAuthResponse.toApi() = AuthApiResponse(
+    token = token,
+    profile = UserAuthProfileResponse(
+        id = profile.id,
+        username = profile.username,
+    )
+)
+
+
+// NatsUserProfile -> UserProfileApiResponse
 fun NatsUserProfile.toApi() = UserProfileApiResponse(
     id = this.id,
-    nickname = this.nickname,
+    username = this.username,
     avatarUrl = this.avatarUrl,
     email = this.email,
     fullName = this.fullName
@@ -101,7 +112,7 @@ fun NatsChat.toApi(currentUserId: String): ChatApiResponse {
         this.name ?: "Group Chat" // Имя группы или стандартное имя
     } else {
         // Ищем другого участника в DM чате
-        this.members.find { it.id != currentUserId }?.nickname ?: "Chat" // Имя собеседника или стандартное
+        this.members.find { it.id != currentUserId }?.username ?: "Chat" // Имя собеседника или стандартное
     }
     return ChatApiResponse(
         id = this.id,

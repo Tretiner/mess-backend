@@ -84,6 +84,6 @@ data class NatsProfileGetRequest(
 @Serializable
 data class NatsUserProfile(
     val id: String,
-    val nickname: String,
+    val username: String,
     val avatarUrl: String?
 )

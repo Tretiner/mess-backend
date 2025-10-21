@@ -18,9 +18,7 @@ internal data class RegistrationResult(
     val token: String?,
     val profile: NatsUserProfileStub?, // Возвращаем заглушку
     val userId: UUID?
-) {
-    val isSuccess: Boolean get() = token != null && profile != null && userId != null
-}
+)
 
 // Результат логина
 internal data class LoginResult(

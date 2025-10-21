@@ -3,7 +3,6 @@ val exposedVersion = "0.49.0"
 val logbackVersion = "1.4.14"
 val natsVersion = "2.17.3"
 val kotlinxDatetimeVersion = "0.6.0"
-val kotlinVersion = "1.9.23"
 val serializationVersion = "1.6.3"
 val postgresDriverVersion = "42.7.3"
 val jwtVersion = "4.4.0" // auth0-jwt

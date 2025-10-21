@@ -1,6 +1,5 @@
 package org.mess.backend.user
 
-import io.ktor.server.config.*
 import io.nats.client.Connection
 import io.nats.client.Nats
 import kotlinx.serialization.encodeToString
@@ -8,7 +7,6 @@ import kotlinx.serialization.json.Json
 import org.mess.backend.core.DefaultJson
 import org.mess.backend.core.NatsErrorResponse
 import org.mess.backend.core.decodeFromBytes
-import org.mess.backend.user.db.DatabaseConfig
 import org.mess.backend.user.db.initDatabase
 import org.mess.backend.user.models.*
 import org.mess.backend.user.services.ProfileService
@@ -83,7 +81,7 @@ fun main() {
             // Вызываем обновленный метод сервиса
             val updatedProfile = profileService.updateProfile(
                 userId = UUID.fromString(request.userId),
-                newNickname = request.newNickname,
+                newUsername = request.newUsername,
                 newAvatarUrl = request.newAvatarUrl,
                 newEmail = request.newEmail, // <-- Новое поле
                 newFullName = request.newFullName // <-- Новое поле

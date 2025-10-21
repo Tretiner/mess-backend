@@ -7,18 +7,14 @@ import io.ktor.server.netty.*
 import io.ktor.server.websocket.* // Импорт плагина WebSockets
 import io.nats.client.Connection
 import io.nats.client.Nats
-import kotlinx.serialization.json.Json
+import org.mess.backend.core.DefaultJson
 import org.mess.backend.gateway.plugins.* // Импортируем все наши функции конфигурации плагинов
 import org.mess.backend.gateway.services.NatsClient
 import org.slf4j.LoggerFactory
 import java.time.Duration // Импорт для настроек WebSocket
 
-// Глобальный JSON-парсер с настройками
-val json = Json {
-    ignoreUnknownKeys = true // Игнорировать неизвестные поля при парсинге
-    prettyPrint = true       // Форматировать JSON в логах (для читаемости)
-    isLenient = true         // Разрешить некоторые нестрогости в JSON
-}
+val json = DefaultJson
+
 // Глобальный логгер
 val log = LoggerFactory.getLogger("GatewayApplication")
 
@@ -41,9 +37,15 @@ fun main() {
 
     // 4. Запускаем Ktor-сервер
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
-    log.info("Starting Ktor server on host 0.0.0.0, port {}", port)
-    embeddedServer(Netty, port = port, host = "0.0.0.0", module = { module(config, natsClient, natsConnection) })
-        .start(wait = true) // wait = true блокирует основной поток, пока сервер работает
+    val host = System.getenv("HOST") ?: "0.0.0.0"
+    log.info("Starting Ktor server on host {}, port {}", host, port)
+
+    embeddedServer(
+        Netty,
+        port = port,
+        host = host,
+        module = { module(config, natsClient, natsConnection) }
+    ).start(wait = true) // wait = true блокирует основной поток, пока сервер работает
 }
 
 // Модуль Ktor-приложения для организации кода

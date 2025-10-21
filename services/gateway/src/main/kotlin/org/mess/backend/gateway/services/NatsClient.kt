@@ -8,9 +8,9 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+import org.mess.backend.core.NatsErrorResponse
 import org.mess.backend.gateway.exceptions.ServiceException
 import org.mess.backend.gateway.log // Используем глобальный логгер
-import org.mess.backend.gateway.models.nats.NatsErrorResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.concurrent.TimeoutException
@@ -38,7 +38,7 @@ class NatsClient(
         topic: String,
         request: T,
         timeout: Duration = Duration.ofSeconds(5) // Таймаут по умолчанию 5 секунд
-    ): R {
+    ): Result<R> {
         // 1. Сериализуем запрос в JSON
         val requestJson = try {
             json.encodeToString<T>(request)
@@ -79,19 +79,16 @@ class NatsClient(
 
         // 3a. Пытаемся распарсить как УСПЕШНЫЙ ответ (тип R)
         try {
-            return json.decodeFromString<R>(replyJson)
+            return Result.success(json.decodeFromString<R>(replyJson))
         } catch (e: SerializationException) {
             log.warn("Failed to parse successful response from '{}' as {}. Trying to parse as NatsErrorResponse...", topic, R::class.simpleName)
             // 3b. Не получилось как R. Пытаемся распарсить как ОШИБКУ (NatsErrorResponse), которую вернул сервис
             try {
-                val errorResponse = json.decodeFromString(NatsErrorResponse.serializer(), replyJson)
+                val errorResponse = json.decodeFromString<NatsErrorResponse>(replyJson)
                 log.warn("Service '{}' returned an error: {}", topic, errorResponse.error)
                 // Ошибка пришла от внутреннего сервиса, но для клиента это внутренняя ошибка сервера (500)
-                // Или можно выбрать другой код, например BadGateway (502), если сервис явно вернул ошибку
-                throw ServiceException(
-                    HttpStatusCode.InternalServerError,
-                    errorResponse.error
-                )
+                // Или можно выбрать другой код, например BadGateway (502), если сервис явно вернул ошибку]
+                return Result.failure(Exception(errorResponse.error))
             } catch (e2: Exception) {
                 // 3c. Сервис вернул совершенно невалидный JSON (не R и не NatsErrorResponse)
                 log.error("Failed to parse response (as {} or NatsErrorResponse) from '{}'. Body: '{}'. Error: {}", R::class.simpleName, topic, replyJson, e2.message)
