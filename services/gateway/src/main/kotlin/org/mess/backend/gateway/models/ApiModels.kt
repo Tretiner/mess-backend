@@ -32,10 +32,14 @@ data class ChatMessageApiRequest(val chatId: String, val type: String, val conte
 // --- Модели для ОТВЕТОВ клиенту от REST API ---
 
 @Serializable
-data class AuthApiResponse(val token: String, val profile: UserAuthProfileResponse) // Ответ на /auth/login, /auth/register
+data class AuthApiResponse(
+    val token: String,
+    val profile: UserAuthProfileResponse
+) // Ответ на /auth/login, /auth/register
 
 @Serializable
-data class UserAuthProfileResponse( // Модель профиля для клиента
+data class UserAuthProfileResponse(
+    // Модель профиля для клиента
     val id: String,
     val username: String,
 )
