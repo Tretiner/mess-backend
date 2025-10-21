@@ -87,12 +87,3 @@ data class NatsUserProfile(
     val nickname: String,
     val avatarUrl: String?
 )
-
-// ---
-// ОБЩИЕ МОДЕЛИ
-// ---
-
-@Serializable
-data class NatsErrorResponse(
-    val error: String
-)

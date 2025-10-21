@@ -18,3 +18,4 @@ include(
 
     ":services:gateway",
 )
+include("core")

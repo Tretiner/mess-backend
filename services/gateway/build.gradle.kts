@@ -22,6 +22,8 @@ repositories {
 }
 
 dependencies {
+    implementation(":core")
+
     // --- Ktor Server ---
     implementation("io.ktor:ktor-server-core-jvm:$ktorVersion")
     implementation("io.ktor:ktor-server-netty-jvm:$ktorVersion")

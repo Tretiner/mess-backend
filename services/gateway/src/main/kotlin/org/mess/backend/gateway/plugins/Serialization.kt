@@ -9,7 +9,6 @@ import org.mess.backend.gateway.json // Используем наш глобал
 // Плагин Ktor ContentNegotiation для автоматической сериализации/десериализации JSON
 fun Application.configureSerialization() {
     install(ContentNegotiation) {
-        // Используем kotlinx.serialization с нашими глобальными настройками
         json(json)
     }
 }

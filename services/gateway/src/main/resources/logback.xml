@@ -6,14 +6,16 @@
         </encoder>
     </appender>
 
-    <root level="INFO"> <appender-ref ref="STDOUT"/>
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
     </root>
 
     <logger name="org.mess.backend.gateway" level="DEBUG" additivity="false">
         <appender-ref ref="STDOUT"/>
     </logger>
 
+    <logger name="io.ktor" level="INFO"/>
     <logger name="io.netty" level="INFO"/>
     <logger name="io.nats.client" level="INFO"/>
-    <logger name="io.ktor.routing" level="TRACE"/>
+
 </configuration>

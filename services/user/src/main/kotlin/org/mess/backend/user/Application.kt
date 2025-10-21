@@ -5,6 +5,9 @@ import io.nats.client.Connection
 import io.nats.client.Nats
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.mess.backend.core.DefaultJson
+import org.mess.backend.core.NatsErrorResponse
+import org.mess.backend.core.decodeFromBytes
 import org.mess.backend.user.db.DatabaseConfig
 import org.mess.backend.user.db.initDatabase
 import org.mess.backend.user.models.*
@@ -37,8 +40,7 @@ fun main() {
     // --- СЛУШАТЕЛЬ 1: Событие `user.created` (Pub/Sub) ---
     val eventDispatcher = nats.createDispatcher { msg ->
         try {
-            val eventJson = String(msg.data, StandardCharsets.UTF_8)
-            val event = json.decodeFromString<UserCreatedEvent>(eventJson)
+            val event = DefaultJson.decodeFromBytes<UserCreatedEvent>(msg.data)
 
             println("Received user.created event for ${event.username}")
 
@@ -56,8 +58,7 @@ fun main() {
     val getDispatcher = nats.createDispatcher { msg ->
         var responseJson: String
         try {
-            val requestJson = String(msg.data, StandardCharsets.UTF_8)
-            val request = json.decodeFromString<NatsProfileGetRequest>(requestJson)
+            val request = DefaultJson.decodeFromBytes<NatsProfileGetRequest>(msg.data)
 
             val profile = profileService.getProfile(UUID.fromString(request.userId))
 
@@ -77,9 +78,7 @@ fun main() {
     val updateDispatcher = nats.createDispatcher { msg ->
         var responseJson: String
         try {
-            val requestJson = String(msg.data, StandardCharsets.UTF_8)
-            // Парсим новый NatsProfileUpdateRequest с доп. полями
-            val request = json.decodeFromString<NatsProfileUpdateRequest>(requestJson)
+            val request = DefaultJson.decodeFromBytes<NatsProfileUpdateRequest>(msg.data)
 
             // Вызываем обновленный метод сервиса
             val updatedProfile = profileService.updateProfile(

@@ -2,71 +2,116 @@
 package org.mess.backend.gateway.models.api
 
 import kotlinx.serialization.Serializable
-import org.mess.backend.gateway.models.*
-import org.mess.backend.gateway.models.nats.*
+import org.mess.backend.gateway.models.nats.NatsChat // NATS модель чата
+import org.mess.backend.gateway.models.nats.NatsGetMyChatsResponse // NATS ответ списка чатов
+import org.mess.backend.gateway.models.nats.NatsSearchResponse // NATS ответ поиска
+import org.mess.backend.gateway.models.nats.NatsUserProfile // NATS модель профиля
 
-// --- Модели для REST API-запросов (от клиента) ---
+// --- Модели для ЗАПРОСОВ от клиента к REST API ---
 
 @Serializable
 data class AuthApiRequest(val username: String, val password: String)
 
 @Serializable
-data class UpdateProfileApiRequest(val newNickname: String? = null, val newAvatarUrl: String? = null) // Поля опциональны
+data class UpdateProfileApiRequest(
+    val newNickname: String? = null, // Поля опциональны для обновления
+    val newAvatarUrl: String? = null,
+    val newEmail: String? = null,
+    val newFullName: String? = null
+)
 
 @Serializable
 data class CreateGroupChatApiRequest(val name: String, val memberIds: List<String>)
 
-// Сообщение, которое клиент (например, Android) шлет в WebSocket
+// --- Модель для СООБЩЕНИЯ от клиента в WebSocket ---
 @Serializable
 data class ChatMessageApiRequest(val chatId: String, val type: String, val content: String)
 
 
-// --- Модели для REST API-ответов (клиенту) ---
+// --- Модели для ОТВЕТОВ клиенту от REST API ---
 
 @Serializable
-data class AuthApiResponse(val token: String, val profile: UserProfileApiResponse)
+data class AuthApiResponse(val token: String, val profile: UserAuthProfileResponse) // Ответ на /auth/login, /auth/register
 
 @Serializable
-data class UserProfileApiResponse(val id: String, val nickname: String, val avatarUrl: String?)
+data class UserAuthProfileResponse( // Модель профиля для клиента
+    val id: String,
+    val nickname: String,
+)
 
 @Serializable
-data class SearchUsersApiResponse(val users: List<UserProfileApiResponse>)
+data class UserProfileApiResponse( // Модель профиля для клиента
+    val id: String,
+    val nickname: String,
+    val avatarUrl: String?,
+    val email: String?,
+    val fullName: String?
+)
 
 @Serializable
-data class ChatApiResponse(val id: String, val name: String, val isGroup: Boolean, val members: List<UserProfileApiResponse>)
+data class SearchUsersApiResponse(val users: List<UserProfileApiResponse>) // Ответ на /users/search
 
 @Serializable
-data class GetMyChatsApiResponse(val chats: List<ChatApiResponse>)
+data class ChatApiResponse( // Модель чата для клиента
+    val id: String,
+    val name: String, // Имя чата или собеседника
+    val isGroup: Boolean,
+    val members: List<UserProfileApiResponse> // Список участников
+)
 
+@Serializable
+data class GetMyChatsApiResponse(val chats: List<ChatApiResponse>) // Ответ на /chats
+
+// --- Модель для СООБЩЕНИЯ клиенту через WebSocket ---
+@Serializable
+data class BroadcastMessageApiResponse( // Соответствует NatsBroadcastMessage
+    val messageId: String,
+    val chatId: String,
+    val sender: UserProfileApiResponse, // Полный профиль отправителя
+    val type: String,
+    val content: String,
+    val sentAt: String // kotlinx.datetime.Instant сериализуется в строку ISO 8601
+)
+
+// --- Модель для ОШИБОК от REST API ---
 @Serializable
 data class ErrorApiResponse(val error: String)
 
 
-// --- Мапперы из NATS-моделей (от сервисов) в API-модели (клиенту) ---
+// --- Функции-мапперы: Конвертация из NATS моделей в API модели ---
 
-fun NatsUserProfile.toApi() = UserProfileApiResponse(id, nickname, avatarUrl)
+// NatsUserProfile -> UserProfileApiResponse
+fun NatsUserProfile.toApi() = UserProfileApiResponse(
+    id = this.id,
+    nickname = this.nickname,
+    avatarUrl = this.avatarUrl,
+    email = this.email,
+    fullName = this.fullName
+)
 
-fun NatsAuthResponse.toApi() = AuthApiResponse(token, profile.toApi())
+// NatsSearchResponse -> SearchUsersApiResponse
+fun NatsSearchResponse.toApi() = SearchUsersApiResponse(
+    users = this.users.map { it.toApi() } // Применяем маппер профиля к каждому элементу
+)
 
-fun NatsSearchResponse.toApi() = SearchUsersApiResponse(users.map { it.toApi() })
-
-// Конвертирует NatsChat в ChatApiResponse, определяя имя для DM чатов
+// NatsChat -> ChatApiResponse
 fun NatsChat.toApi(currentUserId: String): ChatApiResponse {
+    // Определяем имя чата: имя группы или имя собеседника для DM
     val chatName = if (this.isGroup || (this.name != null && this.name.isNotEmpty())) {
         this.name ?: "Group Chat" // Имя группы или стандартное имя
     } else {
-        // Для DM-чатов показываем имя собеседника
-        this.members.find { it.id != currentUserId }?.nickname ?: "Chat" // Имя другого участника или стандартное
+        // Ищем другого участника в DM чате
+        this.members.find { it.id != currentUserId }?.nickname ?: "Chat" // Имя собеседника или стандартное
     }
     return ChatApiResponse(
         id = this.id,
         name = chatName,
         isGroup = this.isGroup,
-        members = this.members.map { it.toApi() }
+        members = this.members.map { it.toApi() } // Конвертируем профили участников
     )
 }
 
-// Конвертирует NatsGetMyChatsResponse в GetMyChatsApiResponse
+// NatsGetMyChatsResponse -> GetMyChatsApiResponse
 fun NatsGetMyChatsResponse.toApi(currentUserId: String) = GetMyChatsApiResponse(
-    chats = this.chats.map { it.toApi(currentUserId) } // Используем маппер NatsChat.toApi
+    chats = this.chats.map { it.toApi(currentUserId) } // Применяем маппер чата к каждому элементу
 )

@@ -47,8 +47,3 @@ data class NatsUserProfile(
 data class NatsSearchResponse(
     val users: List<NatsUserProfile>
 )
-
-@Serializable
-data class NatsErrorResponse(
-    val error: String
-)

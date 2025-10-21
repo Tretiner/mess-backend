@@ -6,6 +6,9 @@ import kotlinx.serialization.json.Json
 import org.mess.backend.chat.models.NatsErrorResponse
 import org.mess.backend.chat.models.NatsProfileGetRequest
 import org.mess.backend.chat.models.NatsUserProfile
+import org.mess.backend.core.DefaultJson
+import org.mess.backend.core.NatsErrorResponse
+import org.mess.backend.core.encodeToBytes
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.UUID
@@ -15,7 +18,7 @@ import java.util.UUID
  */
 class RemoteProfileService(
     private val nats: Connection,
-    private val json: Json
+    private val json: Json = DefaultJson
 ) {
     // Фейковый профиль на случай, если user-service недоступен
     private val fallbackProfile = NatsUserProfile("unknown-id", "Unknown User", null)
@@ -26,23 +29,22 @@ class RemoteProfileService(
     suspend fun getProfile(userId: UUID): NatsUserProfile {
         return try {
             val request = NatsProfileGetRequest(userId.toString())
-            val requestJson = json.encodeToString(NatsProfileGetRequest.serializer(), request)
+            val requestJson = json.encodeToBytes<NatsProfileGetRequest>(request)
 
             // Используем async-await (из kotlinx.coroutines.future)
             val future = nats.request(
                 "user.profile.get",
-                requestJson.toByteArray(StandardCharsets.UTF_8)
+                requestJson
             )
             val reply = future.await()
 
             val replyJson = String(reply.data, StandardCharsets.UTF_8)
 
-            // Пытаемся распарсить как УСПЕХ
             try {
-                json.decodeFromString(NatsUserProfile.serializer(), replyJson)
+                json.decodeFromString<NatsUserProfile>(replyJson)
             } catch (e: Exception) {
                 // Пытаемся распарсить как ОШИБКУ
-                val error = json.decodeFromString(NatsErrorResponse.serializer(), replyJson)
+                val error = json.decodeFromString<NatsErrorResponse>(replyJson)
                 println("Error from user-service: ${error.error}")
                 fallbackProfile.copy(id = userId.toString())
             }

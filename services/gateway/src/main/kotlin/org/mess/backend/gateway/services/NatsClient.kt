@@ -5,10 +5,11 @@ import io.ktor.http.*
 import io.nats.client.Connection
 import kotlinx.coroutines.future.await
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 import org.mess.backend.gateway.exceptions.ServiceException
-import org.mess.backend.gateway.log
+import org.mess.backend.gateway.log // Используем глобальный логгер
 import org.mess.backend.gateway.models.nats.NatsErrorResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -16,29 +17,41 @@ import java.util.concurrent.TimeoutException
 
 /**
  * Хелпер для выполнения NATS Request-Reply запросов к другим микросервисам.
- * Инкапсулирует логику сериализации/десериализации JSON и обработки ошибок.
+ * Инкапсулирует логику сериализации/десериализации JSON и обработки ошибок NATS/сервисов.
  */
 class NatsClient(
     val nats: Connection,
     val json: Json
 ) {
+    /**
+     * Отправляет запрос к другому сервису по NATS и ожидает ответ.
+     * @param T Тип объекта запроса (должен быть @Serializable).
+     * @param R Тип объекта успешного ответа (должен быть @Serializable).
+     * @param topic Тема NATS для отправки запроса (например, "auth.login").
+     * @param request Объект запроса типа T.
+     * @param timeout Максимальное время ожидания ответа.
+     * @return Объект успешного ответа типа R.
+     * @throws ServiceException если сервис вернул ошибку (NatsErrorResponse),
+     * произошел таймаут NATS, ответ не удалось распарсить или произошла другая ошибка NATS/сериализации.
+     */
     suspend inline fun <reified T : Any, reified R : Any> request(
         topic: String,
         request: T,
-        timeout: Duration = Duration.ofSeconds(5) // Таймаут по умолчанию
+        timeout: Duration = Duration.ofSeconds(5) // Таймаут по умолчанию 5 секунд
     ): R {
+        // 1. Сериализуем запрос в JSON
         val requestJson = try {
-            json.encodeToString(serializer<T>(), request)
+            json.encodeToString<T>(request)
         } catch (e: SerializationException) {
-            log.error("Failed to serialize NATS request for topic '{}': {}", topic, e.message)
-            // Это ошибка программирования, бросаем внутреннюю ошибку
-            throw ServiceException(HttpStatusCode.InternalServerError, "Failed to serialize request for '$topic'")
+            log.error("BUG: Failed to serialize NATS request for topic '{}': {}", topic, e.message)
+            // Это ошибка программирования (неверная модель T), бросаем 500
+            throw ServiceException(HttpStatusCode.InternalServerError, "Internal error: Failed to serialize request for '$topic'")
         }
 
-        log.debug("Sending NATS request to '{}': {}", topic, requestJson) // Логируем сам запрос (осторожно с PII)
+        log.debug("Sending NATS request to '{}'. Body: {}", topic, requestJson) // Осторожно с PII в логах
 
+        // 2. Отправляем NATS запрос и ждем ответа
         val reply = try {
-            // Асинхронно отправляем запрос и ждем ответа
             val future = nats.requestWithTimeout(
                 topic,
                 requestJson.toByteArray(StandardCharsets.UTF_8),
@@ -48,45 +61,47 @@ class NatsClient(
         } catch (e: TimeoutException) {
             log.error("NATS request to '{}' timed out after {} seconds.", topic, timeout.seconds)
             throw ServiceException(
-                HttpStatusCode.GatewayTimeout, // Используем 504 Gateway Timeout
+                HttpStatusCode.GatewayTimeout, // 504 Gateway Timeout
                 "Service '$topic' did not respond within ${timeout.seconds} seconds."
             )
         } catch (e: Exception) {
-            // Другие ошибки NATS (например, нет подписчиков, ошибка подключения)
-            log.error("NATS request to '{}' failed: {}", topic, e.message, e)
+            // Другие ошибки NATS (например, нет подписчиков, ошибка подключения к NATS серверу)
+            log.error("NATS request to '{}' failed unexpectedly: {}", topic, e.message, e)
             throw ServiceException(
-                HttpStatusCode.ServiceUnavailable, // Сервис недоступен
+                HttpStatusCode.ServiceUnavailable, // 503 Service Unavailable
                 "Communication error with service '$topic': ${e.message}"
             )
         }
 
+        // 3. Десериализуем ответ
         val replyJson = String(reply.data, StandardCharsets.UTF_8)
-        log.debug("Received NATS reply from '{}': {}", topic, replyJson)
+        log.debug("Received NATS reply from '{}'. Body: {}", topic, replyJson)
 
-        // Пытаемся распарсить как УСПЕШНЫЙ ответ (тип R)
+        // 3a. Пытаемся распарсить как УСПЕШНЫЙ ответ (тип R)
         try {
-            return json.decodeFromString(serializer<R>(), replyJson)
+            return json.decodeFromString<R>(replyJson)
         } catch (e: SerializationException) {
-            log.warn("Failed to parse successful response from '{}' as {}. Trying to parse as error...", topic, R::class.simpleName)
-            // Не получилось. Пытаемся распарсить как ОШИБКУ (NatsErrorResponse), которую вернул сервис
+            log.warn("Failed to parse successful response from '{}' as {}. Trying to parse as NatsErrorResponse...", topic, R::class.simpleName)
+            // 3b. Не получилось как R. Пытаемся распарсить как ОШИБКУ (NatsErrorResponse), которую вернул сервис
             try {
                 val errorResponse = json.decodeFromString(NatsErrorResponse.serializer(), replyJson)
                 log.warn("Service '{}' returned an error: {}", topic, errorResponse.error)
-                // Используем код InternalServerError, т.к. ошибка произошла во внутреннем сервисе
+                // Ошибка пришла от внутреннего сервиса, но для клиента это внутренняя ошибка сервера (500)
+                // Или можно выбрать другой код, например BadGateway (502), если сервис явно вернул ошибку
                 throw ServiceException(
                     HttpStatusCode.InternalServerError,
                     errorResponse.error
                 )
             } catch (e2: Exception) {
-                // Сервис вернул совершенно невалидный JSON
-                log.error("Failed to parse response (success or error) from '{}'. Body: '{}'. Error: {}", topic, replyJson, e2.message)
+                // 3c. Сервис вернул совершенно невалидный JSON (не R и не NatsErrorResponse)
+                log.error("Failed to parse response (as {} or NatsErrorResponse) from '{}'. Body: '{}'. Error: {}", R::class.simpleName, topic, replyJson, e2.message)
                 throw ServiceException(
-                    HttpStatusCode.InternalServerError, // Ошибка на стороне сервера (gateway)
-                    "Invalid response format received from service '$topic'."
+                    HttpStatusCode.InternalServerError, // Однозначно внутренняя ошибка
+                    "Invalid or unexpected response format received from service '$topic'."
                 )
             }
         } catch (e: Exception) {
-            // Другие непредвиденные ошибки при парсинге
+            // Другие непредвиденные ошибки при парсинге (маловероятно)
             log.error("Unexpected error parsing response from '{}': {}", topic, e.message, e)
             throw ServiceException(
                 HttpStatusCode.InternalServerError,

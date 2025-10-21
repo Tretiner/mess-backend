@@ -28,6 +28,8 @@ repositories {
 }
 
 dependencies {
+    implementation(project(":core"))
+
     // --- Kotlin & Ktor (для чтения конфига) ---
     implementation(kotlin("stdlib-jdk8"))
     implementation("io.ktor:ktor-server-core-jvm:$ktorVersion")

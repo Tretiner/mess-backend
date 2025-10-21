@@ -5,35 +5,49 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 
 // Этот файл содержит data-классы, описывающие JSON-контракты
-// для общения между gateway и другими микросервисами через NATS.
+// для общения между gateway и ДРУГИМИ микросервисами через NATS.
 
 // --- Общие ---
 @Serializable
-data class NatsErrorResponse(val error: String) // Модель для ответа с ошибкой от любого сервиса
+data class NatsErrorResponse(val error: String) // Ожидаемый ответ с ошибкой от любого сервиса
 
 // --- Модели для `auth-service` ---
 @Serializable
-data class NatsAuthRequest(val username: String, val password: String) // Запрос на auth.register/auth.login
+data class NatsAuthRequest(val username: String, val password: String) // Запрос К auth-service (на auth.register/auth.login)
 @Serializable
-data class NatsAuthResponse(val token: String, val profile: NatsUserProfile) // Успешный ответ от auth.register/auth.login
+data class NatsAuthResponse(val token: String, val profile: NatsUserProfileStub) // Ответ ОТ auth-service
+@Serializable
+data class NatsUserProfileStub(val id: String, val username: String) // Заглушка профиля ОТ auth-service
 
 // --- Модели для `user-service` ---
 @Serializable
-data class NatsProfileGetRequest(val userId: String) // Запрос на user.profile.get
+data class NatsProfileGetRequest(val userId: String) // Запрос К user-service (на user.profile.get)
 @Serializable
-data class NatsProfileUpdateRequest(val userId: String, val newNickname: String?, val newAvatarUrl: String?) // Запрос на user.profile.update
+data class NatsProfileUpdateRequest( // Запрос К user-service (на user.profile.update)
+    val userId: String,
+    val newNickname: String? = null,
+    val newAvatarUrl: String? = null,
+    val newEmail: String? = null,
+    val newFullName: String? = null
+)
 @Serializable
-data class NatsSearchRequest(val query: String) // Запрос на user.search
+data class NatsSearchRequest(val query: String) // Запрос К user-service (на user.search)
 
 @Serializable
-data class NatsUserProfile(val id: String, val nickname: String, val avatarUrl: String?) // Ответ от user.profile.get/update, используется и в других моделях
+data class NatsUserProfile( // Ответ ОТ user-service (ПОЛНАЯ модель профиля)
+    val id: String,
+    val nickname: String,
+    val avatarUrl: String?,
+    val email: String?,
+    val fullName: String?
+)
 @Serializable
-data class NatsSearchResponse(val users: List<NatsUserProfile>) // Ответ от user.search
+data class NatsSearchResponse(val users: List<NatsUserProfile>) // Ответ ОТ user-service (на user.search)
 
 // --- Модели для `chat-service` ---
-// Запросы к chat-service
+// Запросы К chat-service
 @Serializable
-data class NatsIncomingMessage(val userId: String, val chatId: String, val type: String, val content: String) // Публикуется в chat.message.incoming
+data class NatsIncomingMessage(val userId: String, val chatId: String, val type: String, val content: String) // Сообщение от клиента, публикуется В chat.message.incoming
 @Serializable
 data class NatsChatCreateGroupRequest(val creatorId: String, val name: String, val memberIds: List<String>) // Запрос на chat.create.group
 @Serializable
@@ -43,22 +57,22 @@ data class NatsGetMyChatsRequest(val userId: String) // Запрос на chat.g
 @Serializable
 data class NatsAddUserToChatRequest(val addedByUserId: String, val chatId: String, val userIdToAdd: String) // Запрос на chat.member.add
 
-// Ответы и события от chat-service
+// Ответы и События ОТ chat-service
 @Serializable
-data class NatsBroadcastMessage( // Публикуется в chat.broadcast.{userId}
+data class NatsBroadcastMessage( // Сообщение для клиента, получается из NATS темы chat.broadcast.{userId}
     val messageId: String,
     val chatId: String,
-    val sender: NatsUserProfile, // Включает инфо об отправителе из user-service
+    val sender: NatsUserProfile, // Включает ПОЛНЫЙ профиль отправителя
     val type: String,
     val content: String,
     val sentAt: Instant // kotlinx.datetime.Instant сериализуется в строку ISO 8601
 )
 @Serializable
-data class NatsChat( // Ответ от chat.create.group/dm, chat.member.add
+data class NatsChat( // Ответ ОТ chat-service на запросы создания/обновления чата
     val id: String,
     val name: String?,
     val isGroup: Boolean,
-    val members: List<NatsUserProfile> // Включает инфо об участниках из user-service
+    val members: List<NatsUserProfile> // Включает ПОЛНЫЕ профили участников
 )
 @Serializable
-data class NatsGetMyChatsResponse(val chats: List<NatsChat>) // Ответ от chat.get.mychats
+data class NatsGetMyChatsResponse(val chats: List<NatsChat>) // Ответ ОТ chat-service на chat.get.mychats
