@@ -1,6 +1,9 @@
 package org.mess.backend.user.services
 
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.user.db.UserProfilesTable
 import org.mess.backend.user.models.NatsSearchResponse
@@ -9,31 +12,37 @@ import java.util.*
 
 class ProfileService {
 
-    // Хелпер для конвертации ResultRow (БД) -> NatsUserProfile (JSON)
+    // Хелпер конвертации ResultRow -> NatsUserProfile
     private fun toNatsUserProfile(row: ResultRow): NatsUserProfile {
         return NatsUserProfile(
             id = row[UserProfilesTable.id].value.toString(),
             nickname = row[UserProfilesTable.nickname],
-            avatarUrl = row[UserProfilesTable.avatarUrl]
+            avatarUrl = row[UserProfilesTable.avatarUrl],
+            // --- НОВЫЕ ПОЛЯ ---
+            email = row[UserProfilesTable.email],
+            fullName = row[UserProfilesTable.fullName]
+            // --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
         )
     }
 
     /**
-     * Вызывается, когда мы получаем событие `user.created`
+     * Создает профиль при получении события `user.created`.
+     * Инициализирует nickname = username, остальные поля null.
      */
     fun createProfile(userId: UUID, username: String) {
         transaction {
-            // insertIgnore - на случай, если событие придет дважды
             UserProfilesTable.insertIgnore {
-                it[id] = userId // ВАЖНО: мы *устанавливаем* ID из события
-                it[nickname] = username // По умолчанию ник = логин
-                it[avatarUrl] = null
+                it[id] = userId
+                it[nickname] = username // nickname = username по умолчанию
+                // email, fullName, avatarUrl остаются null по умолчанию
+                it[createdAt] = Clock.System.now()
+                it[updatedAt] = Clock.System.now()
             }
         }
     }
 
     /**
-     * Вызывается для `user.profile.get`
+     * Получает профиль пользователя по ID.
      */
     fun getProfile(userId: UUID): NatsUserProfile? {
         return transaction {
@@ -44,32 +53,46 @@ class ProfileService {
     }
 
     /**
-     * Вызывается для `user.profile.update`
+     * Обновляет профиль пользователя.
+     * Поля в запросе, равные null, игнорируются.
      */
-    fun updateProfile(userId: UUID, newNickname: String?, newAvatarUrl: String?): NatsUserProfile? {
-        transaction {
+    fun updateProfile(
+        userId: UUID,
+        newNickname: String?,
+        newAvatarUrl: String?,
+        newEmail: String?,
+        newFullName: String?
+    ): NatsUserProfile? {
+        val updatedRows = transaction {
             UserProfilesTable.update({ UserProfilesTable.id eq userId }) {
-                // Обновляем только те поля, которые были переданы
-                if (newNickname != null) {
-                    it[nickname] = newNickname
-                }
-                if (newAvatarUrl != null) {
-                    it[avatarUrl] = newAvatarUrl
-                }
+                // Обновляем только не-null поля
+                newNickname?.let { nn -> it[nickname] = nn }
+                newAvatarUrl?.let { av -> it[avatarUrl] = av }
+                newEmail?.let { em -> it[email] = em }
+                newFullName?.let { fn -> it[fullName] = fn }
+                it[updatedAt] = Clock.System.now() // Обновляем время
             }
         }
-        // Возвращаем обновленный профиль
-        return getProfile(userId)
+        // Возвращаем обновленный профиль, если обновление произошло
+        return if (updatedRows > 0) getProfile(userId) else null
     }
-
+    
     /**
-     * Вызывается для `user.search`
+     * Ищет пользователей по nickname, fullName или email.
+     * Поиск регистронезависимый.
      */
     fun searchProfiles(query: String): NatsSearchResponse {
+        // Приводим поисковый запрос к нижнему регистру и добавляем wildcard (%)
+        val searchQuery = "%${query.lowercase()}%"
         val users = transaction {
-            UserProfilesTable.select { UserProfilesTable.nickname like "%$query%" }
-                .limit(20)
-                .map { toNatsUserProfile(it) }
+            UserProfilesTable.select {
+                // Ищем совпадения в любом из трех полей (приведенных к нижнему регистру)
+                (UserProfilesTable.nickname.lowerCase() like searchQuery) or
+                        (UserProfilesTable.fullName.lowerCase() like searchQuery) or
+                        (UserProfilesTable.email.lowerCase() like searchQuery)
+            }
+                .limit(20) // Ограничиваем количество результатов
+                .map { toNatsUserProfile(it) } // Конвертируем в NATS-модель
         }
         return NatsSearchResponse(users)
     }

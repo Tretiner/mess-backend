@@ -78,14 +78,18 @@ fun main() {
         var responseJson: String
         try {
             val requestJson = String(msg.data, StandardCharsets.UTF_8)
+            // Парсим новый NatsProfileUpdateRequest с доп. полями
             val request = json.decodeFromString<NatsProfileUpdateRequest>(requestJson)
 
+            // Вызываем обновленный метод сервиса
             val updatedProfile = profileService.updateProfile(
-                UUID.fromString(request.userId),
-                request.newNickname,
-                request.newAvatarUrl
+                userId = UUID.fromString(request.userId),
+                newNickname = request.newNickname,
+                newAvatarUrl = request.newAvatarUrl,
+                newEmail = request.newEmail, // <-- Новое поле
+                newFullName = request.newFullName // <-- Новое поле
             )
-            responseJson = json.encodeToString(updatedProfile)
+            responseJson = json.encodeToString(updatedProfile) // Отправляем обновленный профиль
 
         } catch (e: Exception) {
             responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))

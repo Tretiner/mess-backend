@@ -1,16 +1,18 @@
 package org.mess.backend.user.db
 
 import org.jetbrains.exposed.dao.id.UUIDTable
+import org.jetbrains.exposed.sql.kotlin.datetime.timestamp
+import kotlinx.datetime.Instant
 
-// Таблица Профилей
-// ID здесь - это Primary Key, НО он *не* генерируется автоматически.
-// Мы получаем его из события `user.created`
 object UserProfilesTable : UUIDTable("t_user_profiles") {
-    // Мы не используем .autoGenerate()
-    // id (из UUIDTable) является PK
+    // id (из UUIDTable) является PK, получаем его из auth-service
 
     val nickname = varchar("nickname", 50)
     val avatarUrl = varchar("avatar_url", 255).nullable()
-
-    // createdAt / updatedAt можно добавить по желанию
+    // --- НОВЫЕ ПОЛЯ ---
+    val email = varchar("email", 255).nullable().uniqueIndex() // Email должен быть уникальным (или null)
+    val fullName = varchar("full_name", 100).nullable()
+    // --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
+    val createdAt = timestamp("created_at").default(Instant.now())
+    val updatedAt = timestamp("updated_at").default(Instant.now())
 }
