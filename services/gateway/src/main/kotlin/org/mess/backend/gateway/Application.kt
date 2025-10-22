@@ -65,7 +65,7 @@ fun Application.module(config: AppConfig, natsClient: NatsClient, natsConnection
     }
 
     // Передаем зависимости и настраиваем маршруты (REST и WebSocket)
-    configureRouting(natsClient, natsConnection)
+    configureRouting(natsClient, natsConnection, json)
 
     log.info("Ktor server configured and running.")
 

@@ -5,7 +5,7 @@ import org.mess.backend.auth.db.DatabaseConfig
 import org.slf4j.Logger
 
 // Конфиг для генерации JWT
-internal data class JwtConfig(
+data class JwtConfig(
     val secret: String,
     val issuer: String,
     val audience: String,

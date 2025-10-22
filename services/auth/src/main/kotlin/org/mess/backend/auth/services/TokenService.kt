@@ -1,4 +1,3 @@
-// FILE: services/auth/src/main/kotlin/org/mess/backend/auth/services/TokenService.kt
 package org.mess.backend.auth.services
 
 import com.auth0.jwt.JWT
@@ -7,26 +6,22 @@ import org.mess.backend.auth.JwtConfig
 import java.util.*
 
 /**
- * Сервис для создания JWT токенов.
+ * Сервис для создания долгоживущего JWT Access Token.
  */
-internal class TokenService(private val config: JwtConfig) {
+class TokenService(private val config: JwtConfig) {
 
-    // Алгоритм подписи, инициализируется один раз
     private val algorithm = Algorithm.HMAC256(config.secret)
+    // Устанавливаем время жизни в 1 год (~31.5 миллиардов мс)
+    private val longLivedValidityMs = 31536000000L
 
-    /**
-     * Создает JWT токен для указанного пользователя.
-     * @param userId UUID пользователя.
-     * @param username Имя пользователя (логин).
-     * @return Сгенерированный JWT токен в виде строки.
-     */
-    fun createToken(userId: UUID, username: String): String {
+    /** Создает долгоживущий JWT access token (на 1 год). */
+    fun createAccessToken(userId: UUID, username: String): String {
         return JWT.create()
-            .withAudience(config.audience) // Для кого предназначен токен
-            .withIssuer(config.issuer)     // Кто выдал токен
-            .withClaim("userId", userId.toString()) // Основной идентификатор
-            .withClaim("username", username) // Дополнительная информация (может быть полезна)
-            .withExpiresAt(Date(System.currentTimeMillis() + config.validityMs)) // Время жизни токена
-            .sign(algorithm) // Подписываем токен
+            .withAudience(config.audience)
+            .withIssuer(config.issuer)
+            .withClaim("userId", userId.toString())
+            .withClaim("username", username)
+            .withExpiresAt(Date(System.currentTimeMillis() + longLivedValidityMs))
+            .sign(algorithm)
     }
 }

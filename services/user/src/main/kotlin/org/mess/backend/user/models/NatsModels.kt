@@ -1,6 +1,8 @@
+// FILE: services/user/src/main/kotlin/org/mess/backend/user/models/NatsModels.kt
 package org.mess.backend.user.models
 
 import kotlinx.serialization.Serializable
+import org.mess.backend.core.NatsErrorResponse // Assuming shared core module
 
 // --- События (Слушаем) ---
 @Serializable
@@ -18,32 +20,31 @@ data class NatsProfileGetRequest(
 @Serializable
 data class NatsProfileUpdateRequest(
     val userId: String,
-    // --- НОВЫЕ ПОЛЯ ---
-    val newUsername: String? = null,
+    val newUsername: String? = null, // <-- RENAMED from newNickname
     val newAvatarUrl: String? = null,
     val newEmail: String? = null,
     val newFullName: String? = null
-    // --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
 )
 
 @Serializable
 data class NatsSearchRequest(
-    val query: String
+    val query: String // Search term
 )
 
 // --- Ответы (Отправляем) ---
 @Serializable
-data class NatsUserProfile(
+data class NatsUserProfile( // The canonical user profile model
     val id: String,
-    // --- НОВЫЕ ПОЛЯ ---
-    val username: String,
+    val username: String, // <-- RENAMED from nickname
     val avatarUrl: String?,
     val email: String?,
     val fullName: String?
-    // --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
 )
 
 @Serializable
 data class NatsSearchResponse(
-    val users: List<NatsUserProfile>
+    val users: List<NatsUserProfile> // Contains full profiles
 )
+
+// NatsErrorResponse is now likely in the core module
+// @Serializable data class NatsErrorResponse(val error: String)

@@ -1,120 +1,115 @@
+// FILE: services/user/src/main/kotlin/org/mess/backend/user/Application.kt
 package org.mess.backend.user
 
 import io.nats.client.Connection
 import io.nats.client.Nats
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import org.mess.backend.core.DefaultJson
 import org.mess.backend.core.NatsErrorResponse
 import org.mess.backend.core.decodeFromBytes
+import org.mess.backend.core.encodeToBytes
+import org.mess.backend.user.db.DatabaseConfig
 import org.mess.backend.user.db.initDatabase
 import org.mess.backend.user.models.*
 import org.mess.backend.user.services.ProfileService
+import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
-import java.util.UUID
+import java.util.*
 
-// Глобальный JSON-парсер
-val json = Json {
-    ignoreUnknownKeys = true
-    prettyPrint = true
-}
+val json = DefaultJson
+val log = LoggerFactory.getLogger("UserApplication")
 
 fun main() {
-    // 1. Загружаем конфигурацию
     val config = Config.load()
-    println("Config loaded. Connecting to NATS at ${config.natsUrl}")
+    log.info("Config loaded. Connecting to NATS at ${config.natsUrl}")
 
-    // 2. Инициализируем сервисы
     val profileService = ProfileService()
 
-    // 3. Подключаемся к БД
-    initDatabase(config.db)
-    println("Database connected.")
+    try { initDatabase(config.db); log.info("Database connected.") }
+    catch (e: Exception) { log.error("DB connection failed", e); throw e }
 
-    // 4. Подключаемся к NATS
-    val nats: Connection = Nats.connect(config.natsUrl)
-    println("NATS connected. Awaiting requests...")
+    val nats: Connection = try { Nats.connect(config.natsUrl) }
+    catch (e: Exception) { log.error("NATS connection failed", e); throw e }
+    log.info("NATS connected. Awaiting requests...")
 
-    // --- СЛУШАТЕЛЬ 1: Событие `user.created` (Pub/Sub) ---
+    // --- Listener 1: user.created Event ---
     val eventDispatcher = nats.createDispatcher { msg ->
         try {
-            val event = DefaultJson.decodeFromBytes<UserCreatedEvent>(msg.data)
-
-            println("Received user.created event for ${event.username}")
-
-            // Вызываем бизнес-логику (создаем профиль)
-            profileService.createProfile(UUID.fromString(event.userId), event.username)
-            // Ответ не требуется (это Pub/Sub)
-
-        } catch (e: Exception) {
-            println("Error processing user.created event: ${e.message}")
-        }
+            val event = json.decodeFromBytes<UserCreatedEvent>(msg.data)
+            log.info("Received user.created event for username: {}", event.username)
+            profileService.createProfile(UUID.fromString(event.userId), event.username) // Use username
+        } catch (e: Exception) { log.error("Error processing user.created event: ${e.message}", e) }
     }
     eventDispatcher.subscribe("user.created")
 
-    // --- СЛУШАТЕЛЬ 2: Запрос `user.profile.get` (Request-Reply) ---
+    // --- Listener 2: user.profile.get Request ---
     val getDispatcher = nats.createDispatcher { msg ->
-        var responseJson: String
+        var responseBytes: ByteArray? = null
         try {
-            val request = DefaultJson.decodeFromBytes<NatsProfileGetRequest>(msg.data)
-
+            val request = json.decodeFromBytes<NatsProfileGetRequest>(msg.data)
+            log.debug("Received user.profile.get request for ID: {}", request.userId)
             val profile = profileService.getProfile(UUID.fromString(request.userId))
 
-            responseJson = if (profile != null) {
-                json.encodeToString(profile)
+            responseBytes = if (profile != null) {
+                json.encodeToBytes(profile)
             } else {
-                json.encodeToString(NatsErrorResponse("Profile not found for user ${request.userId}"))
+                log.warn("Profile not found for user ID: {}", request.userId)
+                json.encodeToBytes(NatsErrorResponse("Profile not found for user ${request.userId}"))
             }
         } catch (e: Exception) {
-            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+            log.error("Error processing user.profile.get: ${e.message}", e)
+            responseBytes = json.encodeToBytes(NatsErrorResponse(e.message ?: "Unknown error"))
         }
-        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+        responseBytes?.let { nats.publish(msg.replyTo, it) }
     }
     getDispatcher.subscribe("user.profile.get")
 
-    // --- СЛУШАТЕЛЬ 3: Запрос `user.profile.update` (Request-Reply) ---
+    // --- Listener 3: user.profile.update Request ---
     val updateDispatcher = nats.createDispatcher { msg ->
-        var responseJson: String
+        var responseBytes: ByteArray? = null
         try {
-            val request = DefaultJson.decodeFromBytes<NatsProfileUpdateRequest>(msg.data)
+            val request = json.decodeFromBytes<NatsProfileUpdateRequest>(msg.data)
+            log.debug("Received user.profile.update request for ID: {}", request.userId)
 
-            // Вызываем обновленный метод сервиса
+            // Call updated service method
             val updatedProfile = profileService.updateProfile(
                 userId = UUID.fromString(request.userId),
-                newUsername = request.newUsername,
+                newUsername = request.newUsername, // <-- RENAMED from newNickname
                 newAvatarUrl = request.newAvatarUrl,
-                newEmail = request.newEmail, // <-- Новое поле
-                newFullName = request.newFullName // <-- Новое поле
+                newEmail = request.newEmail,
+                newFullName = request.newFullName
             )
-            responseJson = json.encodeToString(updatedProfile) // Отправляем обновленный профиль
-
+            responseBytes = if (updatedProfile != null) {
+                json.encodeToBytes(updatedProfile)
+            } else {
+                // updateProfile might return null on validation failure or if user not found
+                log.warn("Profile update failed or user not found for ID: {}", request.userId)
+                json.encodeToBytes(NatsErrorResponse("Profile update failed (e.g., username/email taken or user not found)"))
+            }
         } catch (e: Exception) {
-            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+            log.error("Error processing user.profile.update: ${e.message}", e)
+            responseBytes = json.encodeToBytes(NatsErrorResponse(e.message ?: "Unknown error"))
         }
-        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+        responseBytes?.let { nats.publish(msg.replyTo, it) }
     }
     updateDispatcher.subscribe("user.profile.update")
 
-    // --- СЛУШАТЕЛЬ 4: Запрос `user.search` (Request-Reply) ---
+    // --- Listener 4: user.search Request ---
     val searchDispatcher = nats.createDispatcher { msg ->
-        var responseJson: String
+        var responseBytes: ByteArray? = null
         try {
-            val requestJson = String(msg.data, StandardCharsets.UTF_8)
-            val request = json.decodeFromString<NatsSearchRequest>(requestJson)
-
-            val response = profileService.searchProfiles(request.query)
-            responseJson = json.encodeToString(response)
-
+            val request = json.decodeFromBytes<NatsSearchRequest>(msg.data)
+            log.debug("Received user.search request with query: '{}'", request.query)
+            val response = profileService.searchProfiles(request.query) // Uses updated search logic
+            responseBytes = json.encodeToBytes(response)
         } catch (e: Exception) {
-            responseJson = json.encodeToString(NatsErrorResponse(e.message ?: "Unknown error"))
+            log.error("Error processing user.search: ${e.message}", e)
+            responseBytes = json.encodeToBytes(NatsErrorResponse(e.message ?: "Unknown error"))
         }
-        nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+        responseBytes?.let { nats.publish(msg.replyTo, it) }
     }
     searchDispatcher.subscribe("user.search")
 
-    // Держим поток живым
-    Runtime.getRuntime().addShutdownHook(Thread {
-        println("Shutting down NATS connection...")
-        nats.close()
-    })
+    // ... (Shutdown hook)
 }
+
+// Config.kt and db/Database.kt remain the same

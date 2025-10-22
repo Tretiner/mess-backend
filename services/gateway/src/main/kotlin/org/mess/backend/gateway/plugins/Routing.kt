@@ -11,137 +11,176 @@ import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import io.nats.client.Connection
-import io.nats.client.Dispatcher // Импорт для NATS Dispatcher
+import io.nats.client.Dispatcher
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
-import org.mess.backend.core.NatsErrorResponse
-import org.mess.backend.gateway.json // Глобальный Json парсер
+import kotlinx.serialization.json.Json
+import org.mess.backend.core.NatsErrorResponse // Используем общую модель ошибки из core
+import org.mess.backend.core.encodeToBytes // Используем общую функцию расширения из core
+import org.mess.backend.gateway.exceptions.ServiceException // Наше кастомное исключение
 import org.mess.backend.gateway.models.api.* // Модели для API (REST/WebSocket)
+import org.mess.backend.gateway.models.*
 import org.mess.backend.gateway.models.nats.* // Модели для NATS
 import org.mess.backend.gateway.services.NatsClient // Хелпер для NATS Request-Reply
-import org.slf4j.LoggerFactory
+import org.slf4j.LoggerFactory // Используем SLF4J для логирования
 import java.nio.charset.StandardCharsets
 
-// Функция расширения для Application, настраивающая все маршруты
-fun Application.configureRouting(nats: NatsClient, natsRaw: Connection) {
-    val log = LoggerFactory.getLogger("Routing")
+// Получаем логгер специально для роутинга
+val routingLog = LoggerFactory.getLogger("GatewayRouting")
 
+suspend inline fun <T> ApplicationCall.handleNatsResult(
+    result: Result<T>, // Результат вызова nats.request
+    successCode: HttpStatusCode = HttpStatusCode.OK, // Код при успехе (по умолчанию 200)
+    // Функция для преобразования NATS-ответа (T) в API-ответ (Any)
+    transform: (T) -> Any = { it as Any } // По умолчанию возвращает как есть
+) {
+    result.fold(
+        onSuccess = { natsResponse ->
+            // Успех: преобразуем ответ и отправляем клиенту
+            try {
+                val apiResponse = transform(natsResponse)
+                respond(successCode, apiResponse)
+            } catch (e: Exception) {
+                // Ошибка при преобразовании ответа (например, в маппере)
+                routingLog.error("Error transforming NATS response: {}", e.message, e)
+                respond(
+                    HttpStatusCode.InternalServerError,
+                    ErrorApiResponse("Internal gateway error during response transformation.")
+                )
+            }
+        },
+        onFailure = { exception ->
+            // Неудача: извлекаем статус и сообщение из ServiceException
+            if (exception is ServiceException) {
+                routingLog.warn("NATS request failed: Status={}, Message={}", exception.statusCode, exception.message)
+                respond(exception.statusCode, ErrorApiResponse(exception.message))
+            } else {
+                // Обработка других, не ожидаемых исключений (если NatsClient их пробросит)
+                routingLog.error("Unexpected error handling NATS result: {}", exception.message, exception)
+                respond(HttpStatusCode.InternalServerError, ErrorApiResponse("An unexpected gateway error occurred."))
+            }
+        }
+    )
+}
+
+// Функция расширения для Application, настраивающая все маршруты
+fun Application.configureRouting(nats: NatsClient, natsRaw: Connection, json: Json) {
     routing {
-        // --- 1. Публичные роуты (не требуют JWT) ---
         route("/auth") {
             post("/register") {
-                val request = call.receive<AuthApiRequest>() // Получаем JSON из тела запроса
-                log.info("Received registration request for user: {}", request.username)
+                val request = call.receive<AuthApiRequest>()
                 val natsAuthReq = NatsAuthRequest(request.username, request.password)
+                val natsAuthResult = nats.request<NatsAuthRequest, NatsAuthResponse>("auth.register", natsAuthReq)
 
-                // 1. Запрос к auth-service для регистрации (токен + ID/username заглушка)
-                val natsAuthRes = nats.request<NatsAuthRequest, NatsAuthResponse>("auth.register", natsAuthReq)
+                natsAuthResult.onSuccess { natsAuthRes ->
+                    val natsProfileReq = NatsProfileGetRequest(natsAuthRes.profile.id)
+                    val natsProfileResult =
+                        nats.request<NatsProfileGetRequest, NatsUserProfile>("user.profile.get", natsProfileReq)
 
-                log.info("Registration successful for user: {}", request.username)
-                // Собираем финальный ответ для API с полным профилем
-                natsAuthRes
-                    .onSuccess { call.respond(HttpStatusCode.Created, it.toApi()) }
-                    .onFailure { call.respond(HttpStatusCode.BadRequest, NatsErrorResponse(it.message ?: "Unknown error")) }
+                    natsProfileResult.fold(
+                        onSuccess = { natsProfileRes ->
+                            // Маппим без refreshToken
+                            val apiResponse = mapAuthAndProfileToApi(natsAuthRes, natsProfileRes)
+                            call.respond(HttpStatusCode.Created, apiResponse)
+                        },
+                        onFailure = {
+                            // Возвращаем успех регистрации, но с неполным профилем (stub)
+                            val apiResponse = mapAuthToApiWithStub(natsAuthRes)
+                            call.respond(HttpStatusCode.Created, apiResponse)
+                        }
+                    )
+                }.onFailure { exception ->
+                    call.handleNatsResult(Result.failure<NatsAuthResponse>(exception))
+                }
             }
 
             post("/login") {
                 val request = call.receive<AuthApiRequest>()
-                log.info("Received login request for user: {}", request.username)
                 val natsAuthReq = NatsAuthRequest(request.username, request.password)
+                val natsAuthResult = nats.request<NatsAuthRequest, NatsAuthResponse>("auth.login", natsAuthReq)
 
-                // 1. Запрос к auth-service для логина (токен + ID/username заглушка)
-                val natsAuthRes = nats.request<NatsAuthRequest, NatsAuthResponse>("auth.login", natsAuthReq)
+                natsAuthResult.onSuccess { natsAuthRes ->
+                    val natsProfileReq = NatsProfileGetRequest(natsAuthRes.profile.id)
+                    val natsProfileResult =
+                        nats.request<NatsProfileGetRequest, NatsUserProfile>("user.profile.get", natsProfileReq)
 
-                natsAuthRes
-                    .onSuccess { call.respond(HttpStatusCode.OK, it.toApi()) }
-                    .onFailure { call.respond(HttpStatusCode.BadRequest, NatsErrorResponse(it.message ?: "Unknown error")) }
+                    natsProfileResult.fold(
+                        onSuccess = { natsProfileRes ->
+                            val apiResponse = mapAuthAndProfileToApi(natsAuthRes, natsProfileRes)
+                            call.respond(HttpStatusCode.OK, apiResponse)
+                        },
+                        onFailure = { profileError ->
+                            call.handleNatsResult(Result.failure<NatsUserProfile>(profileError))
+                        }
+                    )
+                }.onFailure { exception ->
+                    call.handleNatsResult(Result.failure<NatsAuthResponse>(exception))
+                }
             }
+
+            // --- УДАЛЕН ЭНДПОИНТ /auth/refresh ---
         }
 
-        // --- 2. Защищенные роуты (требуют валидного JWT) ---
-        authenticate("auth-jwt") { // Ktor проверит токен перед выполнением кода внутри блока
-
-            // --- Пользователи ---
+        authenticate("auth-jwt") {
             route("/users") {
                 get("/me") {
                     val principal = call.principal<JWTPrincipal>()!!
                     val userId = principal.payload.getClaim("userId").asString()
-                    log.info("Getting profile for user: {}", userId)
+                    routingLog.info("Getting profile for user: {}", userId)
                     val natsReq = NatsProfileGetRequest(userId)
-                    val natsRes = nats.request<NatsProfileGetRequest, NatsUserProfile>("user.profile.get", natsReq).getOrThrow()
-                    call.respond(natsRes.toApi()) // Маппер toApi() включает новые поля
+                    val result = nats.request<NatsProfileGetRequest, NatsUserProfile>("user.profile.get", natsReq)
+                    call.handleNatsResult(result) { it.toApi() } // NatsUserProfile.toApi()
                 }
-
                 put("/me") {
                     val principal = call.principal<JWTPrincipal>()!!
                     val userId = principal.payload.getClaim("userId").asString()
-                    val request = call.receive<UpdateProfileApiRequest>() // Получаем JSON с новыми полями
-                    log.info("Updating profile for user: {}", userId)
-
-                    val natsReq = NatsProfileUpdateRequest( // Создаем NATS-запрос с новыми полями
-                        userId = userId,
-                        newUsername = request.newUsername,
-                        newAvatarUrl = request.newAvatarUrl,
-                        newEmail = request.newEmail,
-                        newFullName = request.newFullName
+                    val request = call.receive<UpdateProfileApiRequest>() // Uses newUsername
+                    routingLog.info("Updating profile for user: {}", userId)
+                    // Pass newUsername to NatsProfileUpdateRequest
+                    val natsReq = NatsProfileUpdateRequest(
+                        userId,
+                        request.newUsername,
+                        request.newAvatarUrl,
+                        request.newEmail,
+                        request.newFullName
                     )
-                    val natsRes =
-                        nats.request<NatsProfileUpdateRequest, NatsUserProfile>("user.profile.update", natsReq).getOrThrow()
-                    log.info("Profile updated successfully for user: {}", userId)
-                    call.respond(natsRes.toApi()) // Возвращаем обновленный профиль с новыми полями
+                    val result = nats.request<NatsProfileUpdateRequest, NatsUserProfile>("user.profile.update", natsReq)
+                    routingLog.info("Profile update request sent for user: {}", userId)
+                    call.handleNatsResult(result) { it.toApi() } // NatsUserProfile.toApi()
                 }
-
                 get("/search") {
-                    val query = call.request.queryParameters["q"]
-                    if (query.isNullOrBlank()) {
-                        log.warn("Search request received without 'q' parameter")
+                    val query = call.request.queryParameters["q"] ?: run {
                         return@get call.respond(
                             HttpStatusCode.BadRequest,
                             ErrorApiResponse("Query parameter 'q' is required.")
                         )
                     }
-                    log.info("Searching users with query: {}", query)
+                    routingLog.info("Searching users with query: {}", query)
                     val natsReq = NatsSearchRequest(query)
-                    val natsRes = nats.request<NatsSearchRequest, NatsSearchResponse>("user.search", natsReq).getOrThrow()
-                    call.respond(natsRes.toApi()) // Маппер toApi() для NatsSearchResponse использует маппер для NatsUserProfile
+                    val result = nats.request<NatsSearchRequest, NatsSearchResponse>("user.search", natsReq)
+                    call.handleNatsResult(result) { it.toApi() } // NatsSearchResponse.toApi()
                 }
             }
 
-            // --- Чаты ---
             route("/chats") {
                 get {
                     val principal = call.principal<JWTPrincipal>()!!
                     val userId = principal.payload.getClaim("userId").asString()
-                    log.info("Getting chats for user: {}", userId)
+                    routingLog.info("Getting chats for user: {}", userId)
                     val natsReq = NatsGetMyChatsRequest(userId)
-                    val natsRes =
-                        nats.request<NatsGetMyChatsRequest, NatsGetMyChatsResponse>("chat.get.mychats", natsReq).getOrThrow()
-                    // Передаем userId для правильного маппинга имен DM-чатов и полных профилей
-                    call.respond(natsRes.toApi(userId))
+                    val result =
+                        nats.request<NatsGetMyChatsRequest, NatsGetMyChatsResponse>("chat.get.mychats", natsReq)
+                    call.handleNatsResult(result) { it.toApi(userId) } // NatsGetMyChatsResponse.toApi()
                 }
-
                 post("/group") {
                     val principal = call.principal<JWTPrincipal>()!!
                     val creatorId = principal.payload.getClaim("userId").asString()
                     val request = call.receive<CreateGroupChatApiRequest>()
-                    log.info(
-                        "User {} creating group chat '{}' with members: {}",
-                        creatorId,
-                        request.name,
-                        request.memberIds
-                    )
-
-                    val natsReq = NatsChatCreateGroupRequest(
-                        creatorId = creatorId,
-                        name = request.name,
-                        memberIds = request.memberIds
-                    )
-                    val natsRes = nats.request<NatsChatCreateGroupRequest, NatsChat>("chat.create.group", natsReq).getOrThrow()
-                    log.info("Group chat created successfully with id: {}", natsRes.id)
-                    call.respond(HttpStatusCode.Created, natsRes.toApi(creatorId))
+                    routingLog.info("User {} creating group chat '{}'", creatorId, request.name)
+                    val natsReq = NatsChatCreateGroupRequest(creatorId, request.name, request.memberIds)
+                    val result = nats.request<NatsChatCreateGroupRequest, NatsChat>("chat.create.group", natsReq)
+                    call.handleNatsResult(result, HttpStatusCode.Created) { it.toApi(creatorId) } // NatsChat.toApi()
                 }
-
                 post("/dm/{otherUserId}") {
                     val principal = call.principal<JWTPrincipal>()!!
                     val myId = principal.payload.getClaim("userId").asString()
@@ -149,15 +188,11 @@ fun Application.configureRouting(nats: NatsClient, natsRaw: Connection) {
                         HttpStatusCode.BadRequest,
                         ErrorApiResponse("Missing otherUserId parameter")
                     )
-                    log.info("User {} creating DM chat with user: {}", myId, otherUserId)
-
+                    routingLog.info("User {} creating DM chat with user: {}", myId, otherUserId)
                     val natsReq = NatsChatCreateDmRequest(userId1 = myId, userId2 = otherUserId)
-                    val natsRes = nats.request<NatsChatCreateDmRequest, NatsChat>("chat.create.dm", natsReq).getOrThrow()
-                    log.info("DM chat created/retrieved successfully with id: {}", natsRes.id)
-                    call.respond(HttpStatusCode.OK, natsRes.toApi(myId))
+                    val result = nats.request<NatsChatCreateDmRequest, NatsChat>("chat.create.dm", natsReq)
+                    call.handleNatsResult(result) { it.toApi(myId) } // NatsChat.toApi()
                 }
-
-                // Добавление пользователя в чат
                 post("/{chatId}/members/{userId}") {
                     val principal = call.principal<JWTPrincipal>()!!
                     val addedByUserId = principal.payload.getClaim("userId").asString()
@@ -169,105 +204,75 @@ fun Application.configureRouting(nats: NatsClient, natsRaw: Connection) {
                         HttpStatusCode.BadRequest,
                         ErrorApiResponse("Missing userId parameter")
                     )
-                    log.info("User {} adding user {} to chat {}", addedByUserId, userIdToAdd, chatId)
-
-                    // Оборачиваем в try-catch не нужно, т.к. StatusPages перехватит ServiceException
-                    val natsReq = NatsAddUserToChatRequest(
-                        addedByUserId = addedByUserId,
-                        chatId = chatId,
-                        userIdToAdd = userIdToAdd
-                    )
-                    // Делаем запрос к chat-service на добавление
-                    val natsRes = nats.request<NatsAddUserToChatRequest, NatsChat>("chat.member.add", natsReq).getOrThrow()
-                    log.info("User {} added successfully to chat {}", userIdToAdd, chatId)
-                    call.respond(HttpStatusCode.OK, natsRes.toApi(addedByUserId))
-                    // Если nats.request бросит ServiceException, его перехватит StatusPages
+                    routingLog.info("User {} adding user {} to chat {}", addedByUserId, userIdToAdd, chatId)
+                    val natsReq = NatsAddUserToChatRequest(addedByUserId, chatId, userIdToAdd)
+                    val result = nats.request<NatsAddUserToChatRequest, NatsChat>("chat.member.add", natsReq)
+                    call.handleNatsResult(result) { it.toApi(addedByUserId) } // NatsChat.toApi()
                 }
             }
 
             // --- WebSocket для чата ---
-            webSocket("/chat") { // Путь к WebSocket эндпоинту
+            // Логика WebSocket остается прежней, так как она не использует NatsClient напрямую
+            // и должна обрабатывать ошибки отправки/получения внутри сессии.
+            webSocket("/chat") {
                 val principal = call.principal<JWTPrincipal>()!!
                 val userId = principal.payload.getClaim("userId").asString()
-                log.info("WebSocket connection established for user: {}", userId)
-
-                // Объявляем dispatcher заранее, чтобы он был доступен в finally
-                var dispatcher: Dispatcher? = null // Используем var и null
+                routingLog.info("WebSocket connection established for user: {}", userId)
+                var dispatcher: Dispatcher? = null
 
                 try {
-                    // 1. ПОДПИСКА (NATS -> WebSocket)
                     val broadcastTopic = "chat.broadcast.$userId"
-                    dispatcher = natsRaw.createDispatcher { msg -> // Присваиваем dispatcher здесь
-                        // Запускаем отправку в корутине сессии WebSocket
-                        launch { // 'launch' неявно использует CoroutineScope этой WebSocket-сессии
+                    dispatcher = natsRaw.createDispatcher { msg ->
+                        launch {
                             try {
                                 val msgJson = String(msg.data, StandardCharsets.UTF_8)
-                                // Просто пересылаем JSON как текст в WebSocket
                                 outgoing.send(Frame.Text(msgJson))
-                                log.debug("Sent broadcast message to user {} via WebSocket", userId)
+                                routingLog.debug("Sent broadcast message to user {} via WebSocket", userId)
                             } catch (e: Exception) {
-                                // Ловим ошибки отправки, если клиент внезапно отключился или другая проблема
-                                log.error(
-                                    "Error sending broadcast to WebSocket for user {}: {}. Closing WebSocket.",
+                                routingLog.error(
+                                    "Error sending broadcast to WebSocket for user {}: {}",
                                     userId,
                                     e.message
                                 )
-                                // Не закрываем dispatcher здесь, закроется в finally
-                                close(
-                                    CloseReason(
-                                        CloseReason.Codes.UNEXPECTED_CONDITION,
-                                        "Failed to send message: ${e.message}"
-                                    )
-                                ) // Закрываем WebSocket
+                                close(CloseReason(CloseReason.Codes.UNEXPECTED_CONDITION, "Send failed"))
                             }
                         }
-                    }.apply { subscribe(broadcastTopic) } // Подписываемся сразу после создания
+                    }.apply { subscribe(broadcastTopic) }
+                    routingLog.info("Subscribed to NATS topic: {}", broadcastTopic)
 
-                    log.info("Subscribed to NATS topic: {}", broadcastTopic)
-
-                    // 2. ПУБЛИКАЦИЯ (WebSocket -> NATS)
-                    // Слушаем входящие фреймы от клиента
                     incoming.consumeEach { frame ->
                         if (frame is Frame.Text) {
                             val text = frame.readText()
-                            log.debug("Received message from user {} via WebSocket: {}", userId, text)
+                            routingLog.debug("Received message from user {} via WebSocket", userId)
                             try {
-                                // Парсим JSON, пришедший от клиента
                                 val clientMsg = json.decodeFromString<ChatMessageApiRequest>(text)
-                                // Добавляем userId и формируем сообщение для NATS
-                                val natsMsg = NatsIncomingMessage(
-                                    userId = userId,
-                                    chatId = clientMsg.chatId,
-                                    type = clientMsg.type,
-                                    content = clientMsg.content
-                                )
-                                val natsJson = json.encodeToString(NatsIncomingMessage.serializer(), natsMsg)
-                                // Публикуем в общую тему для обработки chat-service
-                                natsRaw.publish("chat.message.incoming", natsJson.toByteArray(StandardCharsets.UTF_8))
-                                log.debug("Published incoming message to NATS topic 'chat.message.incoming'")
+                                val natsMsg =
+                                    NatsIncomingMessage(userId, clientMsg.chatId, clientMsg.type, clientMsg.content)
+                                natsRaw.publish("chat.message.incoming", json.encodeToBytes(natsMsg))
+                                routingLog.debug("Published incoming message to NATS topic 'chat.message.incoming'")
                             } catch (e: Exception) {
-                                log.error(
-                                    "Error processing incoming WebSocket message from user {}: {}",
+                                routingLog.error(
+                                    "Error processing incoming WS message from user {}: {}",
                                     userId,
                                     e.message
                                 )
-                                // Отправляем сообщение об ошибке обратно клиенту
                                 try {
-                                    outgoing.send(Frame.Text(json.encodeToString(ErrorApiResponse("Invalid message format: ${e.message}"))))
+                                    outgoing.send(Frame.Text(String(json.encodeToBytes(ErrorApiResponse("Invalid message format: ${e.message}")))))
                                 } catch (sendError: Exception) {
-                                    log.error("Failed to send error back to user {}: {}", userId, sendError.message)
+                                    routingLog.error(
+                                        "Failed to send error back to user {}: {}",
+                                        userId,
+                                        sendError.message
+                                    )
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    log.error("Error in WebSocket session for user {}: {}", userId, e.message, e)
-                    // Закрываем соединение с кодом ошибки
+                    routingLog.error("Error in WebSocket session for user {}: {}", userId, e.message, e)
                     close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, e.localizedMessage ?: "WebSocket error"))
                 } finally {
-                    // 3. ОЧИСТКА - выполняется всегда при выходе из try/catch
-                    log.info("WebSocket connection closed for user: {}. Closing NATS dispatcher.", userId)
-                    // Корректно закрываем NATS dispatcher здесь, если он был создан
+                    routingLog.info("WebSocket connection closed for user: {}. Closing NATS dispatcher.", userId)
                     dispatcher?.let { natsRaw.closeDispatcher(it) }
                 }
             }

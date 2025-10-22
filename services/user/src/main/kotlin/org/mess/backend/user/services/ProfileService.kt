@@ -1,7 +1,10 @@
+// FILE: services/user/src/main/kotlin/org/mess/backend/user/services/ProfileService.kt
 package org.mess.backend.user.services
 
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.user.db.UserProfilesTable
 import org.mess.backend.user.models.NatsSearchResponse
@@ -10,38 +13,31 @@ import java.util.*
 
 class ProfileService {
 
-    // Хелпер конвертации ResultRow -> NatsUserProfile
+    // Helper: ResultRow -> NatsUserProfile
     private fun toNatsUserProfile(row: ResultRow): NatsUserProfile {
         return NatsUserProfile(
             id = row[UserProfilesTable.id].value.toString(),
-            username = row[UserProfilesTable.nickname],
+            username = row[UserProfilesTable.username], // <-- RENAMED from nickname
             avatarUrl = row[UserProfilesTable.avatarUrl],
-            // --- НОВЫЕ ПОЛЯ ---
             email = row[UserProfilesTable.email],
             fullName = row[UserProfilesTable.fullName]
-            // --- КОНЕЦ НОВЫХ ПОЛЕЙ ---
         )
     }
 
-    /**
-     * Создает профиль при получении события `user.created`.
-     * Инициализирует nickname = username, остальные поля null.
-     */
-    fun createProfile(userId: UUID, username: String) {
+    /** Creates profile on user.created event */
+    fun createProfile(userId: UUID, initialUsername: String) {
         transaction {
             UserProfilesTable.insertIgnore {
                 it[id] = userId
-                it[nickname] = username // nickname = username по умолчанию
-                // email, fullName, avatarUrl остаются null по умолчанию
+                it[username] = initialUsername // <-- RENAMED from nickname, use initialUsername
+                // email, fullName, avatarUrl remain null
                 it[createdAt] = Clock.System.now()
                 it[updatedAt] = Clock.System.now()
             }
         }
     }
 
-    /**
-     * Получает профиль пользователя по ID.
-     */
+    /** Gets profile by ID */
     fun getProfile(userId: UUID): NatsUserProfile? {
         return transaction {
             UserProfilesTable.select { UserProfilesTable.id eq userId }
@@ -50,47 +46,62 @@ class ProfileService {
         }
     }
 
-    /**
-     * Обновляет профиль пользователя.
-     * Поля в запросе, равные null, игнорируются.
-     */
+    /** Updates user profile */
     fun updateProfile(
         userId: UUID,
-        newUsername: String?,
+        newUsername: String?, // <-- RENAMED from newNickname
         newAvatarUrl: String?,
         newEmail: String?,
         newFullName: String?
     ): NatsUserProfile? {
+        // Basic validation (example)
+        if (newUsername != null && newUsername.length < 3) {
+            // In a real app, throw a specific exception caught by Application.kt
+            println("Validation failed: Username too short")
+            return null // Or throw
+        }
+        // TODO: Add email validation if newEmail is not null
+
         val updatedRows = transaction {
+            // Check if new username is already taken by another user
+            if (newUsername != null) {
+                val existing = UserProfilesTable.select {
+                    (UserProfilesTable.username.lowerCase() eq newUsername.lowercase()) and
+                            (UserProfilesTable.id neq userId) // Exclude the current user
+                }.count()
+                if (existing > 0) {
+                    // Throw an exception or handle appropriately in Application.kt
+                    println("Validation failed: Username '$newUsername' already taken.")
+                    // To make NatsClient return a specific error, throw ServiceException or similar
+                    // throw ServiceException(HttpStatusCode.Conflict, "Username '$newUsername' is already taken.")
+                    return@transaction 0 // Indicate failure
+                }
+            }
+            // Similar check for email uniqueness if newEmail is provided
+
+            // Perform the update
             UserProfilesTable.update({ UserProfilesTable.id eq userId }) {
-                // Обновляем только не-null поля
-                newUsername?.let { nn -> it[nickname] = nn }
+                newUsername?.let { un -> it[username] = un } // <-- RENAMED from nickname
                 newAvatarUrl?.let { av -> it[avatarUrl] = av }
                 newEmail?.let { em -> it[email] = em }
                 newFullName?.let { fn -> it[fullName] = fn }
-                it[updatedAt] = Clock.System.now() // Обновляем время
+                it[updatedAt] = Clock.System.now()
             }
         }
-        // Возвращаем обновленный профиль, если обновление произошло
-        return if (updatedRows > 0) getProfile(userId) else null
+        return if (updatedRows > 0) getProfile(userId) else null // Return updated profile only if rows changed
     }
-    
-    /**
-     * Ищет пользователей по nickname, fullName или email.
-     * Поиск регистронезависимый.
-     */
+
+    /** Searches profiles by username, fullName, or email (case-insensitive) */
     fun searchProfiles(query: String): NatsSearchResponse {
-        // Приводим поисковый запрос к нижнему регистру и добавляем wildcard (%)
         val searchQuery = "%${query.lowercase()}%"
         val users = transaction {
             UserProfilesTable.select {
-                // Ищем совпадения в любом из трех полей (приведенных к нижнему регистру)
-                (UserProfilesTable.nickname.lowerCase() like searchQuery) or
+                (UserProfilesTable.username.lowerCase() like searchQuery) or // <-- RENAMED from nickname
                         (UserProfilesTable.fullName.lowerCase() like searchQuery) or
                         (UserProfilesTable.email.lowerCase() like searchQuery)
             }
-                .limit(20) // Ограничиваем количество результатов
-                .map { toNatsUserProfile(it) } // Конвертируем в NATS-модель
+                .limit(20)
+                .map { toNatsUserProfile(it) }
         }
         return NatsSearchResponse(users)
     }

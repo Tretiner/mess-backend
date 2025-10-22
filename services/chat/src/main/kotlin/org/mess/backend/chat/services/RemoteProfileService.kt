@@ -20,7 +20,7 @@ class RemoteProfileService(
     private val json: Json = DefaultJson
 ) {
     // Фейковый профиль на случай, если user-service недоступен
-    private val fallbackProfile = NatsUserProfile("unknown-id", "Unknown User", null)
+    private val fallbackProfile = NatsUserProfile("unknown-id", "Unknown User", null, null, null)
 
     /**
      * Делает Request-Reply вызов в `user-service`, чтобы получить профиль.
