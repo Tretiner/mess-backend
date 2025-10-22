@@ -1,15 +1,11 @@
 package org.mess.backend.chat
 
-import io.ktor.server.config.*
 import io.nats.client.Connection
 import io.nats.client.Nats
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Instant
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import org.mess.backend.chat.db.DatabaseConfig
 import org.mess.backend.chat.db.initDatabase
 import org.mess.backend.chat.models.*
 import org.mess.backend.chat.services.ChatService
@@ -19,99 +15,123 @@ import org.mess.backend.core.NatsErrorResponse
 import org.mess.backend.core.decodeFromBytes
 import org.mess.backend.core.encodeToBytes
 import java.nio.charset.StandardCharsets
-import java.util.*
 
-// CoroutineScope для обработки сообщений в отдельных потоках
 val serviceScope = CoroutineScope(Dispatchers.IO)
+val json: Json = DefaultJson
 
 fun main() {
-    val json = DefaultJson
-
-    // 1. Загружаем конфигурацию
     val config = Config.load()
     println("Config loaded. Connecting to NATS at ${config.natsUrl}")
 
-    // 2. Подключаемся к NATS
     val nats: Connection = Nats.connect(config.natsUrl)
     println("NATS connected.")
 
-    // 3. Инициализируем сервисы
-    // Этот сервис *сам* является NATS-клиентом к `user-service`
     val remoteProfileService = RemoteProfileService(nats)
     val chatService = ChatService(remoteProfileService)
 
-    // 4. Подключаемся к БД
     initDatabase(config.db)
     println("Database connected. Awaiting requests...")
 
     // --- СЛУШАТЕЛЬ 1: `chat.message.incoming` (Pub/Sub) ---
-    // Это самый сложный слушатель
-    val msgDispatcher = nats.createDispatcher { msg ->
-        // Запускаем в корутине, т.к. нам нужно сделать NATS-запрос к user-service
+    nats.createDispatcher { msg ->
         serviceScope.launch {
             try {
                 val incomingMsg = json.decodeFromBytes<NatsIncomingMessage>(msg.data)
-
-                // Вызываем бизнес-логику (которая вызовет NATS-запрос к user-service)
                 val broadcastMessage = chatService.processIncomingMessage(incomingMsg)
-
-                // Публикуем результат в 'broadcast'
                 if (broadcastMessage != null) {
-                    val broadcastJson = json.encodeToString(broadcastMessage)
-                    nats.publish("chat.message.broadcast", broadcastJson.toByteArray(StandardCharsets.UTF_8))
+                    nats.publish("chat.message.broadcast", json.encodeToBytes(broadcastMessage))
                 }
-
             } catch (e: Exception) {
                 println("Error processing chat.message.incoming: ${e.message}")
             }
         }
-    }
-    msgDispatcher.subscribe("chat.message.incoming")
+    }.subscribe("chat.message.incoming")
 
     // --- СЛУШАТЕЛЬ 2: `chat.create.group` (Request-Reply) ---
-    val createGroupDispatcher = nats.createDispatcher { msg ->
-        serviceScope.launch { // Запускаем в корутине, т.к. делаем N+1 NATS-запросы
-            val responseJson = try {
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
                 val request = json.decodeFromBytes<NatsChatCreateGroupRequest>(msg.data)
                 val chat = chatService.createGroupChat(request)
                 json.encodeToBytes(chat)
             } catch (e: Exception) {
                 json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
             }
-            nats.publish(msg.replyTo, responseJson)
+            nats.publish(msg.replyTo, response)
         }
-    }
-    createGroupDispatcher.subscribe("chat.create.group")
+    }.subscribe("chat.create.group")
 
     // --- СЛУШАТЕЛЬ 3: `chat.create.dm` (Request-Reply) ---
-    val createDmDispatcher = nats.createDispatcher { msg ->
-        serviceScope.launch { // Запускаем в корутине, т.к. делаем N+1 NATS-запросы
-            val responseJson = try {
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
                 val request = json.decodeFromBytes<NatsChatCreateDmRequest>(msg.data)
                 val chat = chatService.createDirectMessageChat(request)
                 json.encodeToBytes(chat)
             } catch (e: Exception) {
                 json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
             }
-            nats.publish(msg.replyTo, responseJson)
+            nats.publish(msg.replyTo, response)
         }
-    }
-    createDmDispatcher.subscribe("chat.create.dm")
+    }.subscribe("chat.create.dm")
 
-    // --- СЛУШАТЕЛЬ 4: `chat.get.mychats` (Request-Reply) ---
-    val getChatsDispatcher = nats.createDispatcher { msg ->
-        serviceScope.launch { // Запускаем в корутине, т.к. делаем N+1 NATS-запросы
-            val responseJson = try {
+    // --- СЛУШАТЕЛЬ 4: `chat.get.mychats` (Request-Reply - ОПТИМИЗИРОВАН) ---
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
                 val request = json.decodeFromBytes<NatsGetMyChatsRequest>(msg.data)
                 val response = chatService.getMyChats(request.userId)
-                json.encodeToString(response)
+                json.encodeToBytes(response)
             } catch (e: Exception) {
-                json.encodeToString(NatsErrorResponse(e.message ?: "Error"))
+                json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
             }
-            nats.publish(msg.replyTo, responseJson.toByteArray(StandardCharsets.UTF_8))
+            nats.publish(msg.replyTo, response)
         }
-    }
-    getChatsDispatcher.subscribe("chat.get.mychats")
+    }.subscribe("chat.get.mychats")
+
+    // --- НОВЫЙ СЛУШАТЕЛЬ 5: `chat.get.details` ---
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
+                val request = json.decodeFromBytes<NatsGetChatDetailsRequest>(msg.data)
+                val chat = chatService.getChatDetails(request)
+                json.encodeToBytes(chat)
+            } catch (e: Exception) {
+                json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
+            }
+            nats.publish(msg.replyTo, response)
+        }
+    }.subscribe("chat.get.details")
+
+    // --- НОВЫЙ СЛУШАТЕЛЬ 6: `chat.update.details` (Админ) ---
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
+                val request = json.decodeFromBytes<NatsUpdateChatRequest>(msg.data)
+                val chat = chatService.updateChatDetails(request)
+                json.encodeToBytes(chat)
+            } catch (e: Exception) {
+                json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
+            }
+            nats.publish(msg.replyTo, response)
+        }
+    }.subscribe("chat.update.details")
+
+    // --- НОВЫЙ СЛУШАТЕЛЬ 7: `chat.remove.user` (Админ) ---
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val response = try {
+                val request = json.decodeFromBytes<NatsRemoveUserRequest>(msg.data)
+                chatService.removeUserFromChat(request)
+                // Отправляем простой "ok" или пустой ответ
+                "{}".toByteArray(StandardCharsets.UTF_8)
+            } catch (e: Exception) {
+                json.encodeToBytes(NatsErrorResponse(e.message ?: "Error"))
+            }
+            nats.publish(msg.replyTo, response)
+        }
+    }.subscribe("chat.remove.user")
+
 
     // Держим поток живым
     Runtime.getRuntime().addShutdownHook(Thread {

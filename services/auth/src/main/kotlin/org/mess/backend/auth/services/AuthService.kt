@@ -1,8 +1,12 @@
 package org.mess.backend.auth.services
 
+import `import org`.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.Op
+import org.jetbrains.exposed.sql.SqlExpressionBuilder
 import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.lowerCase
 import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.auth.db.AuthUsersTable
 import org.mess.backend.auth.models.NatsUserProfileStub
@@ -26,7 +30,8 @@ class AuthService(private val tokenService: TokenService) {
 
     fun registerUser(username: String, password: String): RegistrationResult {
         return transaction {
-            val existing = AuthUsersTable.select { AuthUsersTable.username.lowerCase() eq username.lowercase() }.count()
+            val existing =
+                AuthUsersTable.selectAll().where { AuthUsersTable.username.lowerCase() eq username.lowercase() }.count()
             if (existing > 0) return@transaction RegistrationResult(null, null, null)
 
             val passwordHash = BCrypt.hashpw(password, BCrypt.gensalt())
@@ -46,7 +51,8 @@ class AuthService(private val tokenService: TokenService) {
 
     fun loginUser(username: String, password: String): LoginResult {
         return transaction {
-            val row = AuthUsersTable.select { AuthUsersTable.username.lowerCase() eq username.lowercase() }.firstOrNull()
+            val row = AuthUsersTable.selectAll().where { AuthUsersTable.username.lowerCase() eq username.lowercase() }
+                .firstOrNull()
                 ?: return@transaction LoginResult(null, null)
 
             val userId = row[AuthUsersTable.id].value
