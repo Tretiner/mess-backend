@@ -19,29 +19,46 @@ class ChatService(
     // --- Обработка входящих сообщений ---
 
     suspend fun processIncomingMessage(msg: NatsIncomingMessage): NatsBroadcastMessage? {
-        val senderUUID = UUID.fromString(msg.userId)
-        val chatUUID = UUID.fromString(msg.chatId)
+        println(">>> ChatService.processIncomingMessage: START - Processing message from user ${msg.userId} for chat ${msg.chatId}") // ЛОГ СТАРТА
+        val senderUUID = try { UUID.fromString(msg.userId) } catch (e: Exception) { println("!!! ChatService.processIncomingMessage: Invalid sender UUID: ${msg.userId}"); return null }
+        val chatUUID = try { UUID.fromString(msg.chatId) } catch (e: Exception) { println("!!! ChatService.processIncomingMessage: Invalid chat UUID: ${msg.chatId}"); return null }
 
         // 1. Получаем профиль отправителя
-        // В реальном приложении здесь должен быть кэш, но для простоты делаем запрос
-        val senderProfile = profileService.getProfile(senderUUID)
+        println(">>> ChatService.processIncomingMessage: Requesting profile for sender $senderUUID") // ЛОГ ПЕРЕД ЗАПРОСОМ ПРОФИЛЯ
+        val senderProfile = try {
+            profileService.getProfile(senderUUID)
+        } catch (e: Exception) {
+            println("!!! ChatService.processIncomingMessage: EXCEPTION during getProfile for $senderUUID: ${e.message}")
+            return null // Не можем продолжить без профиля
+        }
+        println(">>> ChatService.processIncomingMessage: Got profile for sender: ${senderProfile.username} (ID: ${senderProfile.id})") // ЛОГ ПОСЛЕ ПОЛУЧЕНИЯ ПРОФИЛЯ
+
         val messageId = UUID.randomUUID()
         val timestamp = Clock.System.now()
 
         // 2. Сохраняем сообщение в БД
-        newSuspendedTransaction {
-            MessagesTable.insert {
-                it[id] = messageId
-                it[chatId] = chatUUID
-                it[senderId] = senderUUID
-                it[type] = msg.type
-                it[content] = msg.content
-                it[sentAt] = timestamp
+        try {
+            newSuspendedTransaction { // Используем suspend-транзакцию
+                println(">>> ChatService.processIncomingMessage: Inserting message $messageId into DB...") // ЛОГ ПЕРЕД ВСТАВКОЙ
+                MessagesTable.insert {
+                    it[id] = messageId
+                    it[chatId] = chatUUID
+                    it[senderId] = senderUUID
+                    it[type] = msg.type
+                    it[content] = msg.content
+                    it[sentAt] = timestamp
+                }
+                println(">>> ChatService.processIncomingMessage: Message $messageId saved to DB successfully.") // ЛОГ ПОСЛЕ ВСТАВКИ
             }
+        } catch (e: Exception) {
+            println("!!! ChatService.processIncomingMessage: FAILED to save message $messageId to DB: ${e.message}")
+            e.printStackTrace() // Печатаем stack trace
+            return null // Не отправляем broadcast, если не смогли сохранить
         }
 
         // 3. Создаем сообщение для бродкаста
-        return NatsBroadcastMessage(
+        println(">>> ChatService.processIncomingMessage: Creating broadcast DTO for message $messageId") // ЛОГ ПЕРЕД СОЗДАНИЕМ DTO
+        val broadcastDto = NatsBroadcastMessage(
             messageId = messageId.toString(),
             chatId = msg.chatId,
             sender = senderProfile,
@@ -49,6 +66,8 @@ class ChatService(
             content = msg.content,
             sentAt = timestamp
         )
+        println(">>> ChatService.processIncomingMessage: END - Returning broadcast DTO.") // ЛОГ ЗАВЕРШЕНИЯ
+        return broadcastDto
     }
 
     // --- CRUD для Чатов ---
@@ -259,8 +278,77 @@ class ChatService(
         }
     }
 
+    /**
+     * Fetches historical messages for a chat, ordered newest first.
+     */
+    suspend fun getMessagesForChat(request: NatsMessagesGetRequest): NatsMessagesGetResponse {
+        val chatUUID = try { UUID.fromString(request.chatId) } catch (e: Exception) { throw IllegalArgumentException("Invalid chat ID format.") }
+        val userUUID = try { UUID.fromString(request.userId) } catch (e: Exception) { throw IllegalArgumentException("Invalid user ID format.") }
+
+        val messagesData = newSuspendedTransaction {
+            // 1. Verify user is a member of the chat
+            val isMember = ChatMembersTable.select {
+                (ChatMembersTable.chatId eq chatUUID) and (ChatMembersTable.userId eq userUUID)
+            }.count() > 0
+
+            if (!isMember) {
+                throw SecurityException("User ${request.userId} is not a member of chat ${request.chatId}.")
+            }
+
+            // 2. Query messages
+            val query = MessagesTable.select {
+                (MessagesTable.chatId eq chatUUID) and
+                        // Add condition for pagination if beforeInstant is provided
+                        (request.beforeInstant?.let { MessagesTable.sentAt less it } ?: Op.TRUE)
+            }
+                .orderBy(MessagesTable.sentAt to SortOrder.DESC)
+                .limit(request.limit)
+
+            query.toList() // Execute query and get ResultRows
+        }
+
+        // 3. Collect sender IDs
+        val senderIds = messagesData.mapNotNull { it[MessagesTable.senderId] }.toSet()
+
+        // 4. Fetch profiles in batch
+        val profilesMap = if (senderIds.isNotEmpty()) {
+            profileService.getProfilesBatch(senderIds)
+        } else {
+            emptyMap()
+        }
+
+        // 5. Map to NatsBroadcastMessage DTOs
+        val natsMessages = messagesData.map { row ->
+            val senderId = row[MessagesTable.senderId]
+            val senderProfile = profilesMap[senderId] ?: // Fallback profile if fetch failed
+            NatsUserProfile(senderId.toString(), "Unknown", null, null, null)
+
+            NatsBroadcastMessage(
+                messageId = row[MessagesTable.id].value.toString(),
+                chatId = request.chatId,
+                sender = senderProfile,
+                type = row[MessagesTable.type],
+                content = row[MessagesTable.content],
+                sentAt = row[MessagesTable.sentAt]
+            )
+        }
+
+        return NatsMessagesGetResponse(messages = natsMessages)
+    }
 
     // --- Приватные хелперы ---
+
+    /**
+     * Helper to get member IDs for a chat.
+     */
+    suspend fun getChatMemberIds(chatId: String): List<String> {
+        val chatUUID = try { UUID.fromString(chatId) } catch (e: Exception) { return emptyList() }
+        return newSuspendedTransaction {
+            ChatMembersTable
+                .select { ChatMembersTable.chatId eq chatUUID }
+                .map { it[ChatMembersTable.userId].toString() }
+        }
+    }
 
     /**
      * Внутренний хелпер: Получает полные детали чата по ID.

@@ -34,15 +34,32 @@ fun main() {
 
     // --- СЛУШАТЕЛЬ 1: `chat.message.incoming` (Pub/Sub) ---
     nats.createDispatcher { msg ->
+        println(">>> Chat Service (Dispatcher): Received NATS message on subject: ${msg.subject}")
         serviceScope.launch {
             try {
+                println(">>> Chat Service (Coroutine): Starting processing for incoming message...")
                 val incomingMsg = json.decodeFromBytes<NatsIncomingMessage>(msg.data)
+                println(">>> Chat Service (Coroutine): Parsed incoming message from user ${incomingMsg.userId} for chat ${incomingMsg.chatId}")
+
                 val broadcastMessage = chatService.processIncomingMessage(incomingMsg)
+
+                println(">>> Chat Service (Coroutine): processIncomingMessage completed. Result: ${if (broadcastMessage != null) "Message to broadcast" else "null"}")
+
                 if (broadcastMessage != null) {
-                    nats.publish("chat.message.broadcast", json.encodeToBytes(broadcastMessage))
+                    // 1. Get chat members (requires a DB query or modification to processIncomingMessage)
+                    val memberIds = chatService.getChatMemberIds(broadcastMessage.chatId) // <-- NEW FUNCTION NEEDED in ChatService
+
+                    // 2. Publish to EACH member's topic
+                    memberIds.forEach { memberId ->
+                        val userTopic = "chat.broadcast.$memberId"
+                        println(">>> Chat Service (Coroutine): Publishing message ID ${broadcastMessage.messageId} to '$userTopic'")
+                        nats.publish(userTopic, json.encodeToBytes(broadcastMessage))
+                    }
+                    println(">>> Chat Service (Coroutine): Published message to relevant user topics.")
                 }
             } catch (e: Exception) {
-                println("Error processing chat.message.incoming: ${e.message}")
+                println("!!! Chat Service (Coroutine): Error processing 'chat.message.incoming': ${e.message}")
+                e.printStackTrace()
             }
         }
     }.subscribe("chat.message.incoming")
@@ -131,6 +148,28 @@ fun main() {
             nats.publish(msg.replyTo, response)
         }
     }.subscribe("chat.remove.user")
+
+    // --- NEW LISTENER 8: `chat.messages.get` (Request-Reply) ---
+    nats.createDispatcher { msg ->
+        serviceScope.launch {
+            val responseBytes = try {
+                val request = json.decodeFromBytes<NatsMessagesGetRequest>(msg.data)
+                println(">>> Chat Service: Received message history request for chat ${request.chatId}")
+                val response = chatService.getMessagesForChat(request)
+                println(">>> Chat Service: Sending ${response.messages.size} messages for chat ${request.chatId}")
+                json.encodeToBytes(response)
+            } catch (e: SecurityException) {
+                println("!!! Chat Service: Access denied for history request: ${e.message}")
+                json.encodeToBytes(NatsErrorResponse("Access Denied: ${e.message}"))
+            } catch (e: Exception) {
+                println("!!! Chat Service: Error processing chat.messages.get: ${e.message}")
+                e.printStackTrace()
+                json.encodeToBytes(NatsErrorResponse(e.message ?: "Failed to get messages"))
+            }
+            nats.publish(msg.replyTo, responseBytes)
+        }
+    }.subscribe("chat.messages.get")
+    // --- END NEW LISTENER ---
 
 
     // Держим поток живым

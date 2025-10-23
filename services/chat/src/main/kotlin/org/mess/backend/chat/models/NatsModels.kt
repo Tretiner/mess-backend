@@ -90,3 +90,16 @@ data class NatsUserProfile(
 
 @Serializable
 data class NatsProfilesGetBatchResponse(val profiles: List<NatsUserProfile>)
+
+@Serializable
+data class NatsMessagesGetRequest(
+    val chatId: String,
+    val userId: String, // User requesting history (to check membership)
+    val limit: Int = 50, // Default limit
+    val beforeInstant: Instant? = null // For pagination (load older messages)
+)
+
+@Serializable
+data class NatsMessagesGetResponse(
+    val messages: List<NatsBroadcastMessage> // Reuse the broadcast model
+)

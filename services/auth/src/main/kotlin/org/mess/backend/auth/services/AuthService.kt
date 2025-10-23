@@ -1,11 +1,7 @@
 package org.mess.backend.auth.services
 
-import `import org`.jetbrains.exposed.sql.selectAll
-import org.jetbrains.exposed.sql.Op
-import org.jetbrains.exposed.sql.SqlExpressionBuilder
 import org.jetbrains.exposed.sql.insertAndGetId
 import org.jetbrains.exposed.sql.lowerCase
-import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.auth.db.AuthUsersTable

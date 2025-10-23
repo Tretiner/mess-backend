@@ -1,12 +1,8 @@
 package org.mess.backend.user.services
 
-import `import org`.jetbrains.exposed.sql.selectAll
 import kotlinx.datetime.Clock
 import org.jetbrains.exposed.sql.*
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.like
-import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.experimental.newSuspendedTransaction
-import org.jetbrains.exposed.sql.transactions.transaction
 import org.mess.backend.user.db.UserProfilesTable
 import org.mess.backend.user.models.NatsSearchResponse
 import org.mess.backend.user.models.NatsUserProfile

@@ -115,6 +115,19 @@ data class NatsLastMessage( // NEW
 )
 
 @Serializable
+data class NatsMessagesGetRequest(
+    val chatId: String,
+    val userId: String,
+    val limit: Int = 50,
+    val beforeInstant: Instant? = null
+)
+
+@Serializable
+data class NatsMessagesGetResponse(
+    val messages: List<NatsBroadcastMessage> // Reuse NatsBroadcastMessage
+)
+
+@Serializable
 data class NatsChat( // UPDATED
     val id: String,
     val name: String?,

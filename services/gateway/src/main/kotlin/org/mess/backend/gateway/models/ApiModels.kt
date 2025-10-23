@@ -18,13 +18,13 @@ data class UpdateProfileApiRequest(
 data class CreateGroupChatApiRequest( // UPDATED
     val name: String,
     val memberIds: List<String>,
-    val avatarUrl: String?
+    val avatarUrl: String? = null
 )
 
 @Serializable
 data class UpdateChatApiRequest( // NEW
-    val newName: String?,
-    val newAvatarUrl: String?
+    val newName: String? = null,
+    val newAvatarUrl: String? = null
 )
 
 @Serializable
@@ -75,6 +75,11 @@ data class BroadcastMessageApiResponse(
     val type: String,
     val content: String,
     val sentAt: String // ISO 8601 String
+)
+
+@Serializable
+data class GetChatMessagesApiResponse(
+    val messages: List<BroadcastMessageApiResponse>
 )
 
 @Serializable

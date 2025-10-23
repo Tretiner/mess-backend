@@ -85,3 +85,9 @@ fun NatsChat.toApi(currentUserId: String): ChatApiResponse {
 fun NatsGetMyChatsResponse.toApi(currentUserId: String) = GetMyChatsApiResponse(
     chats = this.chats.map { it.toApi(currentUserId) }
 )
+
+fun NatsMessagesGetResponse.toApi(): GetChatMessagesApiResponse {
+    return GetChatMessagesApiResponse(
+        messages = this.messages.map { it.toApi() }
+    )
+}
